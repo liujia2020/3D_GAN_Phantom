@@ -53,12 +53,6 @@ class TVLoss(nn.Module):
 # =========================================================================
 class AuganModel(BaseModel):
     def modify_commandline_options(parser, is_train=True):
-        # === [关键修改] 在这里直接定义参数，无需修改 train_options.py ===
-        if is_train:
-            # parser.add_argument('--lambda_pixel', type=float, default=100.0, help='weight for pixel loss')
-            # parser.add_argument('--lambda_edge', type=float, default=0.0, help='weight for edge loss')
-            # parser.add_argument('--lambda_perceptual', type=float, default=0.0, help='weight for perceptual loss')
-            parser.add_argument('--lambda_tv', type=float, default=0.0, help='weight for total variation loss')
         return parser
 
     def __init__(self, opt):
@@ -66,7 +60,7 @@ class AuganModel(BaseModel):
         # 定义 Loss 名称，用于日志打印
         # 注意：只有权重 > 0 的 Loss 才会真正计算，但这里我们列出所有可能的 Loss
         self.loss_names = ['G_GAN', 'G_Pixel', 'G_Edge', 'G_Perceptual', 'G_TV', 'D_Real', 'D_Fake']
-        
+        # self.loss_names = ['G_GAN', 'G_Pixel','D_Real', 'D_Fake']
         # 定义可视化图片
         self.visual_names = ['real_lq', 'fake_hq', 'real_sq'] 
         
@@ -109,15 +103,18 @@ class AuganModel(BaseModel):
         self.image_paths = input['case_name']
 
     def forward(self):
+        # 把输入送到G，得到fake输出。
         self.fake_hq = self.netG(self.real_lq)
 
     def backward_D(self):
-        # Fake
+        # Fake 判别器得到生成的图，认为是真图的概率。越小越好，意味着判别器认为生成图是假的。输出接近0.
+        # 如果判别器被骗了，认为生成图是真的，loss就会变大。
         fake_AB = torch.cat((self.real_lq, self.fake_hq), 1)
         pred_fake = self.netD(fake_AB.detach())
         self.loss_D_Fake = self.criterionGAN(pred_fake, False)
 
-        # Real
+        # Real 判别器得到GT，认定为真图的概率。越小越好。1为真。
+        # 如果判别器认为GT是假的，loss就会变大。
         real_AB = torch.cat((self.real_lq, self.real_sq), 1)
         pred_real = self.netD(real_AB)
         self.loss_D_Real = self.criterionGAN(pred_real, True)
