@@ -7,7 +7,7 @@ from data.base_dataset import BaseDataset
 from data.ultrasound_dataset import UltrasoundDataset
 
 def create_dataset(opt):
-    """创建并返回 DataLoader"""
+    """Create a dataset given the option."""
     dataset = UltrasoundDataset(opt)
     print("dataset [UltrasoundDataset] was created")
     
@@ -22,6 +22,6 @@ def create_dataset(opt):
     return data_loader
 
 def get_option_setter(dataset_name):
-    """获取数据集特定的参数设置"""
-    # 不管传入什么 dataset_name，强制返回 UltrasoundDataset 的参数设置
+    """Return the static method <modify_commandline_options> of the dataset class."""
+    # 直接返回 UltrasoundDataset 的方法，因为现在 BaseDataset 里已经有了，不会报错
     return UltrasoundDataset.modify_commandline_options

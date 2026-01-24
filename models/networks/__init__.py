@@ -11,6 +11,26 @@ from .generator import UnetGenerator3D
 from .discriminator import NLayerDiscriminator3D
 
 # ==============================================================================
+# [核心修复] get_scheduler (之前缺失的函数)
+# ==============================================================================
+def get_scheduler(optimizer, opt):
+    """Return a learning rate scheduler"""
+    if opt.lr_policy == 'linear':
+        def lambda_rule(epoch):
+            lr_l = 1.0 - max(0, epoch + opt.epoch_count - opt.n_epochs) / float(opt.n_epochs_decay + 1)
+            return lr_l
+        scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda_rule)
+    elif opt.lr_policy == 'step':
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=opt.lr_decay_iters, gamma=0.1)
+    elif opt.lr_policy == 'plateau':
+        scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.2, threshold=0.01, patience=5)
+    elif opt.lr_policy == 'cosine':
+        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=opt.n_epochs, eta_min=0)
+    else:
+        return NotImplementedError('learning rate policy [%s] is not implemented', opt.lr_policy)
+    return scheduler
+
+# ==============================================================================
 # [补丁] PixelDiscriminator3D (保留着防止报错，但这次不用它)
 # ==============================================================================
 class PixelDiscriminator3D(nn.Module):
@@ -51,48 +71,30 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
     return init_net(net, init_type, init_gain, gpu_ids)
 
 # ==============================================================================
-# [关键修改] define_D
+# define_D
 # ==============================================================================
 def define_D(input_nc, ndf, netD, n_layers_D=3, norm='batch', use_sigmoid=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
     net = None
     norm_layer = get_norm_layer(norm_type=norm)
 
-    # [救档逻辑]
-    # 虽然参数叫 'pixel'，但你的存档里其实是 NLayerDiscriminator (PatchGAN)。
-    # 所以这里强制指向 NLayerDiscriminator3D，并保持 n_layers=3 (默认值)
     if netD == 'pixel':
-        # print("⚠️ 检测到 'pixel' 参数，但为了匹配旧权重，强制使用 NLayerDiscriminator3D (PatchGAN)...")
-        net = NLayerDiscriminator3D(input_nc, ndf, n_layers=3, norm_layer=norm_layer) # 强制 n_layers=3 以匹配权重
-        
+        net = NLayerDiscriminator3D(input_nc, ndf, n_layers=3, norm_layer=norm_layer) 
     elif netD == 'n_layers':
         net = NLayerDiscriminator3D(input_nc, ndf, n_layers=n_layers_D, norm_layer=norm_layer)
     else:
-        # 默认 fallback
         net = NLayerDiscriminator3D(input_nc, ndf, n_layers=3, norm_layer=norm_layer)
 
     return init_net(net, init_type, init_gain, gpu_ids)
 
-# # ==============================================================================
-# # 辅助函数
-# # ==============================================================================
-# def get_norm_layer(norm_type='instance'):
-#     if norm_type == 'batch':
-#         norm_layer = functools.partial(nn.BatchNorm3d, affine=True, track_running_stats=True)
-#     elif norm_type == 'instance':
-#         norm_layer = functools.partial(nn.InstanceNorm3d, affine=False, track_running_stats=False)
-#     elif norm_type == 'none':
-#         def norm_layer(x): return nn.Identity()
-#     else:
-#         raise NotImplementedError('normalization layer [%s] is not found' % norm_type)
-#     return norm_layer
+# ==============================================================================
+# 辅助函数
+# ==============================================================================
 def get_norm_layer(norm_type='instance'):
     if norm_type == 'batch':
         norm_layer = functools.partial(nn.BatchNorm3d, affine=True, track_running_stats=True)
     elif norm_type == 'instance':
         norm_layer = functools.partial(nn.InstanceNorm3d, affine=False, track_running_stats=False)
     elif norm_type == 'group':
-        # [新增] Group Norm: 最适合 Batch Size 小且数据稀疏的场景
-        # num_groups=32 是经典默认值，你的 ngf=64，完全可以被整除
         norm_layer = functools.partial(nn.GroupNorm, 32)
     elif norm_type == 'none':
         def norm_layer(x): return nn.Identity()
@@ -120,7 +122,6 @@ def init_weights(net, init_type='normal', init_gain=0.02):
         elif classname.find('BatchNorm3d') != -1:
             init.normal_(m.weight.data, 1.0, init_gain)
             init.constant_(m.bias.data, 0.0)
-    # print('initialize network with %s' % init_type)
     net.apply(init_func)
 
 def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
