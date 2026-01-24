@@ -7,7 +7,7 @@ from PIL import Image
 from options.train_options import TrainOptions
 from data import create_dataset
 from models import create_model
-from util.visualizer import Visualizer
+# from util.visualizer import Visualizer
 
 # =========================================================================
 # 辅助函数：将 Tensor 转为可视化图片 (单通道 -> 灰度图)

@@ -1,37 +1,16 @@
 """
-此包包含模块的实例化逻辑 (Factory Pattern)。
+models/__init__.py
 """
 import importlib
-from models.base_model import BaseModel
-
-def find_model_using_name(model_name):
-    """
-    根据模型名称导入模块。
-    例如: model_name='augan' -> 导入 models.augan_model
-    """
-    model_filename = "models." + model_name + "_model"
-    modellib = importlib.import_module(model_filename)
-    model = None
-    target_model_name = model_name.replace('_', '') + 'model'
-    for name, cls in modellib.__dict__.items():
-        if name.lower() == target_model_name.lower() \
-           and issubclass(cls, BaseModel):
-            model = cls
-
-    if model is None:
-        print("In %s.py, there should be a subclass of BaseModel with class name that matches %s in lowercase." % (model_filename, target_model_name))
-        exit(0)
-
-    return model
-
-def get_option_setter(model_name):
-    """返回模型类的 modify_commandline_options 静态方法"""
-    model_class = find_model_using_name(model_name)
-    return model_class.modify_commandline_options
+from models.augan_model import AuganModel
 
 def create_model(opt):
-    """创建一个模型实例"""
-    model = find_model_using_name(opt.model)
-    instance = model(opt)
-    print("model [%s] was created" % type(instance).__name__)
+    """创建模型实例"""
+    # 强制使用 AuganModel，忽略 opt.model 参数（或者你可以写逻辑判断）
+    instance = AuganModel(opt)
+    print("model [AuganModel] was created")
     return instance
+
+def get_option_setter(model_name):
+    """获取模型特定的参数设置"""
+    return AuganModel.modify_commandline_options
