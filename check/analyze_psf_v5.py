@@ -18,9 +18,16 @@ INITIAL_POS = [500, 64, 64]
 # 文件列表
 file_dict = {
     'Ground Truth':    '/home/liujia/g_linux/test/simu_stand_fixed_v2/Simu_0010_GT_SQ.nii', 
-    'Exp1 (Pixel100)': '/mnt/g/train_data/test_results/02_augan_Pixel100_Gan0_Tv0/epoch_latest/nifti/Simu_0010_Fake.nii',
-    'Exp2 (Gan5)':     '/mnt/g/train_data/test_results/03_augan_Pixel100_Gan5_Tv0/epoch_latest/nifti/Simu_0010_Fake.nii',
-    'Exp3 (Tv0.1)':    '/mnt/g/train_data/test_results/04_augan_Pixel100_Gan1_Tv0.1/epoch_latest/nifti/Simu_0010_Fake.nii',
+    
+    'Exp1 (Pixel100)': '/mnt/g/train_data/results/06_1Ch_L1_Only/Simu_001_06_1Ch_L1_Only_Fake.nii',
+    'Exp2 (Pixel100)': '/mnt/g/train_data/results/07_1Ch_Standard_GAN/Simu_001_07_1Ch_Standard_GAN_Fake.nii',
+    'Exp3 (Pixel100)': '/mnt/g/train_data/results/08_1Ch_Strong_GAN/Simu_001_08_1Ch_Strong_GAN_Fake.nii',
+    'Exp4 (Pixel100)': '/mnt/g/train_data/results/09_1Ch_Smooth_TV/Simu_001_09_1Ch_Smooth_TV_Fake.nii',
+    'Exp5 (Pixel100)': '/mnt/g/train_data/results/10_1Ch_StrongGAN_Edge/Simu_001_10_1Ch_StrongGAN_Edge_Fake.nii',
+    'Exp6 (Pixel100)': '/mnt/g/train_data/results/11_1Ch_StrongGAN_Percep/Simu_001_11_1Ch_StrongGAN_Percep_Fake.nii',
+    'Exp7 (Pixel100)': '/mnt/g/train_data/results/12_1Ch_Hybrid_EdgePercep/Simu_001_12_1Ch_Hybrid_EdgePercep_Fake.nii',
+    'Exp8 (Pixel100)': '/mnt/g/train_data/results/13_1Ch_UltraGAN_TV/Simu_001_13_1Ch_UltraGAN_TV_Fake.nii',
+    'Exp9 (Pixel100)': '/mnt/g/train_data/results/14_1Ch_Composite_Geo/Simu_001_14_1Ch_Composite_Geo_Fake.nii',
 }
 
 OUTPUT_CSV = '/mnt/g/result_ana/psf_metrics_analysis.csv'
@@ -67,8 +74,9 @@ def robust_load_nii(path):
         print(f"读取错误: {e}")
         return None
 
+# ======= [修改 1] 替换整个 compute_metrics 函数 =======
 def compute_metrics(profile, spacing):
-    """计算 FWHM, FWTM, PSL"""
+    """计算 FWHM, FWTM, PSL (兼容 dB 输入)"""
     x = np.arange(len(profile))
     if len(profile) < 4: return 0,0,-100, x*spacing, profile
     
@@ -78,12 +86,10 @@ def compute_metrics(profile, spacing):
         y_smooth = spl(x_new)
     except:
         y_smooth = profile; x_new = x
-        
-    y_max = y_smooth.max()
-    if y_max > 1e-9: y_smooth /= y_max
-    else: return 0,0,-100, x_new*spacing, y_smooth-100
     
-    y_db = 20 * np.log10(np.maximum(y_smooth, 1e-5))
+    # 核心修改：不再做 log，而是将峰值对齐到 0dB
+    y_max = np.max(y_smooth)
+    y_db = y_smooth - y_max # 峰值归一化为 0
     
     # FWHM (-6dB)
     mask_6 = y_db >= -6.0
@@ -99,7 +105,7 @@ def compute_metrics(profile, spacing):
     psl = np.max(y_db[mask_side]) if np.any(mask_side) else -100
     
     return fwhm, fwtm, psl, x_new*spacing, y_db
-
+# ====================================================
 class PSFViewerV5:
     def __init__(self, file_map, voxel_spacing, init_pos):
         self.file_map = file_map
@@ -109,18 +115,44 @@ class PSFViewerV5:
         self.names = list(file_map.keys())
         self.current_model = self.names[0] 
         
+        # # 1. 加载数据
+        # print(f"🚀 初始化... 默认中心 [Z={self.cz}, X={self.cx}, Y={self.cy}]")
+        # for name, path in file_map.items():
+        #     print(f"  -> 读取 {name}...")
+        #     data = robust_load_nii(path)
+        #     if data is not None:
+        #         vmax = np.percentile(data, 99.9)
+        #         if vmax > 0: data = data / vmax
+        #         self.data_cache[name] = data
+        
+        # if not self.data_cache: raise RuntimeError("无有效数据")
+        # ======= [修改 2] 替换 __init__ 中的加载循环 =======
         # 1. 加载数据
         print(f"🚀 初始化... 默认中心 [Z={self.cz}, X={self.cx}, Y={self.cy}]")
         for name, path in file_map.items():
             print(f"  -> 读取 {name}...")
             data = robust_load_nii(path)
             if data is not None:
-                vmax = np.percentile(data, 99.9)
-                if vmax > 0: data = data / vmax
+                # --- 智能数据转换逻辑 ---
+                max_val = np.max(data)
+                if max_val > 0: 
+                    # 情况A: 线性数据 (如 GT) -> 执行 Log 变换
+                    data = np.abs(data)
+                    data = data / (np.max(data) + 1e-9) + 1e-9
+                    data = 20 * np.log10(data)
+                else:
+                    # 情况B: dB 数据 (如 Exp1) -> 保持原样
+                    pass
+
+                # 统一截断到 -60dB 并将峰值对齐到 0
+                data = np.clip(data, -60, 0)
+                if np.max(data) > -60:
+                    data = data - np.max(data)
+
                 self.data_cache[name] = data
         
         if not self.data_cache: raise RuntimeError("无有效数据")
-        
+        # =================================================       
         # 2. 创建大屏界面布局 (Nested GridSpec)
         # figsize 设为 (20, 12) 以适应大屏
         self.fig = plt.figure(figsize=(20, 12), constrained_layout=True)
@@ -195,7 +227,8 @@ class PSFViewerV5:
         # 1. Axial (Z=cz) -> X-Y
         img_axial = data[self.cz, :, :]
         self.ax_axial.clear()
-        self.ax_axial.imshow(img_axial, cmap='gray', aspect='equal', vmin=0, vmax=0.8)
+        # self.ax_axial.imshow(img_axial, cmap='gray', aspect='equal', vmin=0, vmax=0.8)
+        self.ax_axial.imshow(img_axial, cmap='gray', aspect='equal', vmin=-60, vmax=0)
         self.ax_axial.set_title(f"Axial (Z={self.cz})\n{self.current_model}", fontweight='bold')
         self.ax_axial.axvline(self.cy, **cross_style)
         self.ax_axial.axhline(self.cx, **cross_style)
@@ -204,7 +237,8 @@ class PSFViewerV5:
         img_lat = data[:, :, self.cy]
         self.ax_lat.clear()
         ar_lat = self.spacing[0] / self.spacing[1]
-        self.ax_lat.imshow(img_lat, cmap='gray', aspect=ar_lat, vmin=0, vmax=0.8)
+        # self.ax_lat.imshow(img_lat, cmap='gray', aspect=ar_lat, vmin=0, vmax=0.8)
+        self.ax_lat.imshow(img_lat, cmap='gray', aspect=ar_lat, vmin=-60, vmax=0)
         self.ax_lat.set_title(f"Lateral (Y={self.cy})", fontweight='bold')
         self.ax_lat.axvline(self.cx, **cross_style)
         self.ax_lat.axhline(self.cz, **blue_style)
@@ -213,7 +247,8 @@ class PSFViewerV5:
         img_ele = data[:, self.cx, :]
         self.ax_ele.clear()
         ar_ele = self.spacing[0] / self.spacing[2]
-        self.ax_ele.imshow(img_ele, cmap='gray', aspect=ar_ele, vmin=0, vmax=0.8)
+        # self.ax_ele.imshow(img_ele, cmap='gray', aspect=ar_ele, vmin=0, vmax=0.8)
+        self.ax_ele.imshow(img_ele, cmap='gray', aspect=ar_ele, vmin=-60, vmax=0)
         self.ax_ele.set_title(f"Elevation (X={self.cx})", fontweight='bold')
         self.ax_ele.axvline(self.cy, **cross_style)
         self.ax_ele.axhline(self.cz, **blue_style)

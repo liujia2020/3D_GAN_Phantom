@@ -4,7 +4,7 @@ from .base_model import BaseModel
 from . import networks
 import torchvision.models as models
 import torch.nn.functional as F
-
+from utils.ssim_loss import SSIMLoss
 # =========================================================================
 # [模块 1] VGG19 特征提取器
 # 用于计算感知损失 (Perceptual Loss)，提取图像的纹理和形状特征
@@ -59,7 +59,7 @@ class AuganModel(BaseModel):
         BaseModel.__init__(self, opt)
         # 定义 Loss 名称，用于日志打印
         # 注意：只有权重 > 0 的 Loss 才会真正计算，但这里我们列出所有可能的 Loss
-        self.loss_names = ['G_GAN', 'G_Pixel', 'G_Edge', 'G_Perceptual', 'G_TV', 'D_Real', 'D_Fake']
+        self.loss_names = ['G_GAN', 'G_Pixel', 'G_Edge', 'G_Perceptual', 'G_TV', 'G_SSIM','D_Real', 'D_Fake']
         # self.loss_names = ['G_GAN', 'G_Pixel','D_Real', 'D_Fake']
         # 定义可视化图片
         self.visual_names = ['real_lq', 'fake_hq', 'real_sq'] 
@@ -89,7 +89,8 @@ class AuganModel(BaseModel):
             if opt.lambda_perceptual > 0:
                 self.netVGG = VGG19FeatureExtractor().to(self.device)
                 self.criterionPerceptual = torch.nn.L1Loss()
-            
+            if opt.lambda_ssim > 0:
+                self.criterionSSIM = SSIMLoss().to(self.device)
             # --- 优化器 ---
             self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr * opt.lr_d_ratio, betas=(opt.beta1, 0.999))
@@ -170,8 +171,20 @@ class AuganModel(BaseModel):
         else:
             self.loss_G_TV = torch.tensor(0.0).to(self.device)
 
+        # [新增] 6. SSIM Loss
+        if self.opt.lambda_ssim > 0:
+            # 同样需要把 3D [B, C, D, H, W] 转为 2D [B*D, C, H, W] 进行计算
+            b, c, d, h, w = self.fake_hq.shape
+            fake_2d = self.fake_hq.permute(0, 2, 1, 3, 4).contiguous().view(b * d, c, h, w)
+            real_2d = self.real_sq.permute(0, 2, 1, 3, 4).contiguous().view(b * d, c, h, w)
+            
+            self.loss_G_SSIM = self.criterionSSIM(fake_2d, real_2d) * self.opt.lambda_ssim
+        else:
+            self.loss_G_SSIM = torch.tensor(0.0).to(self.device)
+        
+        
         # 总 Loss 求和
-        self.loss_G = self.loss_G_GAN + self.loss_G_Pixel + self.loss_G_Edge + self.loss_G_Perceptual + self.loss_G_TV
+        self.loss_G = self.loss_G_GAN + self.loss_G_Pixel + self.loss_G_Edge + self.loss_G_Perceptual + self.loss_G_TV + self.loss_G_SSIM
         self.loss_G.backward()
 
     def optimize_parameters(self):

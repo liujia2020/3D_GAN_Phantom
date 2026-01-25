@@ -12,6 +12,7 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--lambda_perceptual', type=float, default=0.0, help='weight for perceptual loss (VGG)')
         parser.add_argument('--lambda_tv', type=float, default=0.0, help='weight for TV loss')
         parser.add_argument('--lambda_edge', type=float, default=0.0, help='weight for edge loss')
+        parser.add_argument('--lambda_ssim', type=float, default=0.0, help='weight for SSIM loss')
         # =======================================
 
         parser.add_argument('--display_freq', type=int, default=400, help='frequency of showing training results on screen')
@@ -32,6 +33,8 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--pool_size', type=int, default=50, help='the size of image buffer that stores previously generated images')
         parser.add_argument('--lr_policy', type=str, default='linear', help='learning rate policy. [linear | step | plateau | cosine]')
         parser.add_argument('--lr_decay_iters', type=int, default=50, help='multiply by a gamma every lr_decay_iters iterations')
+
+        parser.add_argument('--use_attention', action='store_true', help='if specified, use Attention Mechanism (PA + LAA) in Generator')
 
         self.isTrain = True
         return parser
