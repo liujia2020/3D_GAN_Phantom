@@ -1,13 +1,13 @@
 """
-util.py
+util.py - 最终修正版 (纯净 Save)
 """
 import os
 import numpy as np
 import torch
 from PIL import Image
+import nibabel as nib
 
 def mkdirs(paths):
-    """如果文件夹不存在，则创建（支持列表或单个路径）"""
     if isinstance(paths, list) and not isinstance(paths, str):
         for path in paths:
             mkdir(path)
@@ -15,7 +15,6 @@ def mkdirs(paths):
         mkdir(paths)
 
 def mkdir(path):
-    """创建单个文件夹"""
     if not os.path.exists(path):
         try:
             os.makedirs(path)
@@ -23,16 +22,15 @@ def mkdir(path):
             pass
 
 def tensor2im(input_image, imtype=np.uint8):
-    """
-    将 Tensor 转换为 Numpy 图片 (用于可视化)
-    [-1, 1] -> [0, 255]
-    """
     if not isinstance(input_image, np.ndarray):
         if isinstance(input_image, torch.Tensor):
             image_tensor = input_image.data
         else:
             return input_image
         image_numpy = image_tensor[0].cpu().float().numpy()
+        if image_numpy.ndim == 4:
+            mid_slice = image_numpy.shape[1] // 2
+            image_numpy = image_numpy[:, mid_slice, :, :]
         if image_numpy.shape[0] == 1:
             image_numpy = np.tile(image_numpy, (3, 1, 1))
         image_numpy = (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0
@@ -41,31 +39,86 @@ def tensor2im(input_image, imtype=np.uint8):
     return image_numpy.astype(imtype)
 
 def save_image(image_numpy, image_path):
-    """保存 numpy 图片到磁盘"""
     image_pil = Image.fromarray(image_numpy)
     image_pil.save(image_path)
+
+# ==============================================================================
+# 滑窗推理工具
+# ==============================================================================
+def get_gaussian_weight(patch_size, sigma_scale=0.125):
+    d, h, w = patch_size
+    z = np.linspace(-1, 1, d)
+    y = np.linspace(-1, 1, h)
+    x = np.linspace(-1, 1, w)
+    zz, yy, xx = np.meshgrid(z, y, x, indexing='ij')
+    dist = zz**2 + yy**2 + xx**2
+    sigma = sigma_scale 
+    kernel = np.exp(-dist / (2 * sigma**2))
+    kernel = kernel / np.max(kernel)
+    return kernel.astype(np.float32)
+
+def predict_sliding_window(model, input_vol, patch_size=(128, 64, 64), stride=(64, 32, 32)):
+    # 1. 预处理 [-60, 0] -> [-1, 1]
+    norm_min, norm_max = -60.0, 0.0
+    input_vol = np.clip(input_vol, norm_min, norm_max)
+    img_norm = (input_vol - norm_min) / (norm_max - norm_min) * 2.0 - 1.0
     
-# -----------------------------------------------------------------------------
-# [新增] 3D NIfTI 保存功能
-# -----------------------------------------------------------------------------
-def save_nii(tensor, save_path):
+    D, H, W = img_norm.shape
+    pd, ph, pw = patch_size
+    sd, sh, sw = stride
+    
+    # 2. Padding
+    pad_d = (pd - D % pd) % pd
+    pad_h = (ph - H % ph) % ph
+    pad_w = (pw - W % pw) % pw
+    img_pad = np.pad(img_norm, ((0, pad_d+pd), (0, pad_h+ph), (0, pad_w+pw)), mode='reflect')
+    
+    # 3. 初始化
+    output_vol = np.zeros_like(img_pad)
+    weight_map = np.zeros_like(img_pad)
+    patch_weight = get_gaussian_weight(patch_size)
+    
+    model.eval()
+    
+    # 4. 滑窗
+    z_steps = list(range(0, img_pad.shape[0] - pd + 1, sd))
+    y_steps = list(range(0, img_pad.shape[1] - ph + 1, sh))
+    x_steps = list(range(0, img_pad.shape[2] - pw + 1, sw))
+    
+    with torch.no_grad():
+        for z in z_steps:
+            for y in y_steps:
+                for x in x_steps:
+                    patch = img_pad[z:z+pd, y:y+ph, x:x+pw]
+                    patch_tensor = torch.from_numpy(patch).unsqueeze(0).unsqueeze(0).float().cuda()
+                    fake_patch = model.netG(patch_tensor)
+                    fake_patch = fake_patch.squeeze().cpu().numpy()
+                    
+                    output_vol[z:z+pd, y:y+ph, x:x+pw] += fake_patch * patch_weight
+                    weight_map[z:z+pd, y:y+ph, x:x+pw] += patch_weight
+                    
+    # 5. 归一化 & 裁剪
+    weight_map[weight_map == 0] = 1.0
+    output_vol /= weight_map
+    output_vol = (output_vol + 1.0) / 2.0 * (norm_max - norm_min) + norm_min
+    final_vol = output_vol[:D, :H, :W]
+    
+    return final_vol
+
+# ==============================================================================
+# [修正] 纯净版 save_nii (禁止任何隐式转置)
+# ==============================================================================
+def save_nii(data, save_path, affine):
     """
-    将 Tensor 保存为 .nii 文件
-    Tensor Shape: (B, C, D, H, W) -> NII Shape: (D, H, W) or (H, W, D)
+    data: numpy array
+    save_path: path
+    affine: 4x4 matrix
     """
-    if isinstance(tensor, torch.Tensor):
-        # 取 Batch 0, Channel 0 -> (D, H, W)
-        data = tensor[0, 0, ...].cpu().float().numpy()
-    else:
-        data = tensor
+    if isinstance(data, torch.Tensor):
+        data = data.cpu().float().numpy()
         
-    # 反归一化: [-1, 1] -> [-60, 0] (假设原始范围大概是这个)
-    # 或者为了可视化方便，直接存归一化后的值也可以，这里我们存原始值
-    # data = (data + 1.0) / 2.0 * 60.0 - 60.0 
+    # 这里的逻辑：此时的 data 应该已经被 test.py 还原回了和 affine 匹配的形状
+    # 所以直接保存，不做任何多余的 transpose
     
-    # 简单的转置以适配常见软件视角 (视情况而定，通常不需要太复杂)
-    # nibabel 默认是 (x, y, z)，pytorch 是 (z, y, x)
-    data = data.transpose(2, 1, 0) 
-    
-    img = nib.Nifti1Image(data, np.eye(4))
+    img = nib.Nifti1Image(data, affine)
     nib.save(img, save_path)
