@@ -22,15 +22,23 @@ INITIAL_POS = [500, 64, 64]
 file_dict = {
     'Ground Truth':    '/home/liujia/g_linux/test/simu_stand_fixed_v2/Simu_0010_GT_SQ.nii', 
     
-    'Exp1 (Pixel100)': '/mnt/g/train_data/results/06_1Ch_L1_Only/Simu_001_06_1Ch_L1_Only_Fake.nii',
-    'Exp2 (Pixel100)': '/mnt/g/train_data/results/07_1Ch_Standard_GAN/Simu_001_07_1Ch_Standard_GAN_Fake.nii',
-    'Exp3 (Pixel100)': '/mnt/g/train_data/results/08_1Ch_Strong_GAN/Simu_001_08_1Ch_Strong_GAN_Fake.nii',
-    'Exp4 (Pixel100)': '/mnt/g/train_data/results/09_1Ch_Smooth_TV/Simu_001_09_1Ch_Smooth_TV_Fake.nii',
-    'Exp5 (Pixel100)': '/mnt/g/train_data/results/10_1Ch_StrongGAN_Edge/Simu_001_10_1Ch_StrongGAN_Edge_Fake.nii',
-    'Exp6 (Pixel100)': '/mnt/g/train_data/results/11_1Ch_StrongGAN_Percep/Simu_001_11_1Ch_StrongGAN_Percep_Fake.nii',
-    'Exp7 (Pixel100)': '/mnt/g/train_data/results/12_1Ch_Hybrid_EdgePercep/Simu_001_12_1Ch_Hybrid_EdgePercep_Fake.nii',
-    'Exp8 (Pixel100)': '/mnt/g/train_data/results/13_1Ch_UltraGAN_TV/Simu_001_13_1Ch_UltraGAN_TV_Fake.nii',
-    'Exp9 (Pixel100)': '/mnt/g/train_data/results/14_1Ch_Composite_Geo/Simu_001_14_1Ch_Composite_Geo_Fake.nii',
+    # 'Exp1 (Pixel100)': '/mnt/g/train_data/results/06_1Ch_L1_Only/Simu_001_06_1Ch_L1_Only_Fake.nii',
+    # 'Exp2 (Pixel100)': '/mnt/g/train_data/results/07_1Ch_Standard_GAN/Simu_001_07_1Ch_Standard_GAN_Fake.nii',
+    # 'Exp3 (Pixel100)': '/mnt/g/train_data/results/08_1Ch_Strong_GAN/Simu_001_08_1Ch_Strong_GAN_Fake.nii',
+    # 'Exp4 (Pixel100)': '/mnt/g/train_data/results/09_1Ch_Smooth_TV/Simu_001_09_1Ch_Smooth_TV_Fake.nii',
+    # 'Exp5 (Pixel100)': '/mnt/g/train_data/results/10_1Ch_StrongGAN_Edge/Simu_001_10_1Ch_StrongGAN_Edge_Fake.nii',
+    # 'Exp6 (Pixel100)': '/mnt/g/train_data/results/11_1Ch_StrongGAN_Percep/Simu_001_11_1Ch_StrongGAN_Percep_Fake.nii',
+    # 'Exp7 (Pixel100)': '/mnt/g/train_data/results/12_1Ch_Hybrid_EdgePercep/Simu_001_12_1Ch_Hybrid_EdgePercep_Fake.nii',
+    # 'Exp8 (Pixel100)': '/mnt/g/train_data/results/13_1Ch_UltraGAN_TV/Simu_001_13_1Ch_UltraGAN_TV_Fake.nii',
+    # 'Exp9 (Pixel100)': '/mnt/g/train_data/results/14_1Ch_Composite_Geo/Simu_001_14_1Ch_Composite_Geo_Fake.nii',
+    'Exp17': '/mnt/g/train_data/results/17_GAN5_L1_100_Attention/Simu_001_17_GAN5_L1_100_Attention_Fake.nii',
+    'Exp18': '/mnt/g/train_data/results/18_GAN5_L1_100_SSIM1_Attn/Simu_001_18_GAN5_L1_100_SSIM1_Attn_Fake.nii',
+    'Exp19': '/mnt/g/train_data/results/19_GAN5_L1_100_Percep2_Attn/Simu_001_19_GAN5_L1_100_Percep2_Attn_Fake.nii',
+    'Exp20': '/mnt/g/train_data/results/20_GAN5_L1_50_Attn/Simu_001_20_GAN5_L1_50_Attn_Fake.nii',
+    'Exp21': '/mnt/g/train_data/results/21_GAN10_L1_100_Attn/Simu_001_21_GAN10_L1_100_Attn_Fake.nii',
+    'Exp22': '/mnt/g/train_data/results/22_GAN10_L1_100_SSIM1_Attn/Simu_001_22_GAN10_L1_100_SSIM1_Attn_Fake.nii',
+    'Exp23': '/mnt/g/train_data/results/23_GAN5_L1_20_SSIM1_Attn/Simu_001_23_GAN5_L1_20_SSIM1_Attn_Fake.nii',
+
 }
 
 OUTPUT_CSV = '/mnt/g/result_ana/psf_metrics_analysis_v7.csv'
