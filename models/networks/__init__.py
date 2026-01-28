@@ -9,7 +9,7 @@ from .generator import UnetGenerator3D
 
 # 2. 导入 Discriminator
 from .discriminator import NLayerDiscriminator3D
-
+from .generator import UnetGenerator3D, UnetGenerator, ResUnetGenerator
 # ==============================================================================
 # [核心修复] get_scheduler (之前缺失的函数)
 # ==============================================================================
@@ -56,20 +56,29 @@ class PixelDiscriminator3D(nn.Module):
     def forward(self, input):
         return self.net(input)
 
-# ==============================================================================
-# define_G
-# ==============================================================================
-def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
+# models/networks/__init__.py
+
+def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[], use_attention=False, attn_temp=1.0, use_dilation=False):
+    """
+    [Exp 30 修改]: 增加了 attn_temp 和 use_dilation 参数
+    """
     net = None
     norm_layer = get_norm_layer(norm_type=norm)
 
-    if netG == 'unet_3d':
-        net = UnetGenerator3D(input_nc, output_nc, num_downs=4, ngf=ngf, norm_layer=norm_layer, use_dropout=use_dropout)
+    if netG == 'unet_128':
+        net = UnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
+    
+    elif netG == 'unet_3d':
+        net = UnetGenerator(input_nc, output_nc, 6, ngf, norm_layer=norm_layer, use_dropout=use_dropout, is_3d=True, use_attention=use_attention)
+    
+    # [关键修改] ResUnet 3D: 传递 attn_temp 和 use_dilation
+    elif netG == 'res_unet_3d':
+        net = ResUnetGenerator(input_nc, output_nc, 6, ngf, norm_layer=norm_layer, use_dropout=use_dropout, is_3d=True, use_attention=use_attention, attn_temp=attn_temp, use_dilation=use_dilation)
+        
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
-
+        
     return init_net(net, init_type, init_gain, gpu_ids)
-
 # ==============================================================================
 # define_D
 # ==============================================================================

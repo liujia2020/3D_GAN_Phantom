@@ -78,6 +78,17 @@ class AuganModel(BaseModel):
             self.netD = networks.define_D(opt.input_nc + opt.output_nc, opt.ndf, opt.netD,
                                           n_layers_D=3, norm=opt.norm, init_type=opt.init_type, init_gain=opt.init_gain, gpu_ids=self.gpu_ids)
 
+            # models/augan_model.py
+
+            # 定义生成器
+            # [Exp 30 修改]: 显式传递 use_attention, attn_temp, use_dilation
+            self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm,
+                                        not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids,
+                                        use_attention=opt.use_attention,  # 确保 attention 开关被传递
+                                        attn_temp=opt.attn_temp,          # 传递锐化温度
+                                        use_dilation=opt.use_dilation     # 传递空洞卷积开关
+                                        )
+                
             # --- 定义 Loss 函数 ---
             # 1. GAN Loss
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)

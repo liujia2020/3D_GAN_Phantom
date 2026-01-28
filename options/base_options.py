@@ -24,7 +24,7 @@ class BaseOptions():
         parser.add_argument('--dir_lq', type=str, default='Recon_LQ_03', help='folder name for input data (LQ)')
         parser.add_argument('--dir_sq', type=str, default='Recon_SQ_75', help='folder name for target data (SQ)')
         # ==============================
-
+        parser.add_argument('--use_attention', action='store_true', help='if specified, use Attention Mechanism (PA + LAA) in Generator')
         parser.add_argument('--ngf', type=int, default=64, help='# of gen filters in the last conv layer')
         parser.add_argument('--ndf', type=int, default=64, help='# of discrim filters in the first conv layer')
         parser.add_argument('--netD', type=str, default='basic', help='specify discriminator architecture')
@@ -48,7 +48,12 @@ class BaseOptions():
         parser.add_argument('--load_iter', type=int, default='0', help='which iteration to load?')
         parser.add_argument('--verbose', action='store_true', help='if specified, print more debugging information')
         parser.add_argument('--suffix', default='', type=str, help='customized suffix')
-        
+        # =========================================================
+        # [Exp 30 新增参数] 放在 BaseOptions 以确保测试时也能用
+        # =========================================================
+        parser.add_argument('--attn_temp', type=float, default=1.0, help='temperature for attention sharpening (default: 1.0)')
+        parser.add_argument('--use_dilation', action='store_true', help='if specified, use dilated convolutions in the bottleneck')
+        # =========================================================
         # 3D 相关参数
         parser.add_argument('--patch_size_d', type=int, default=64, help='crop size d')
         parser.add_argument('--patch_size_h', type=int, default=128, help='crop size h')

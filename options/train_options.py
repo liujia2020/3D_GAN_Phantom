@@ -34,7 +34,7 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--lr_policy', type=str, default='linear', help='learning rate policy. [linear | step | plateau | cosine]')
         parser.add_argument('--lr_decay_iters', type=int, default=50, help='multiply by a gamma every lr_decay_iters iterations')
 
-        parser.add_argument('--use_attention', action='store_true', help='if specified, use Attention Mechanism (PA + LAA) in Generator')
+        # parser.add_argument('--use_attention', action='store_true', help='if specified, use Attention Mechanism (PA + LAA) in Generator')
 
         self.isTrain = True
         return parser
