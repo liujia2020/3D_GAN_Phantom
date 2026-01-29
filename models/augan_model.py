@@ -49,6 +49,35 @@ class TVLoss(nn.Module):
         return t.size()[1] * t.size()[2] * t.size()[3]
 
 # =========================================================================
+# [Exp 35/36 新增模块] Frequency Loss (频域损失)
+# 作用：在频域对齐，恢复高频细节，消除肉状模糊
+# =========================================================================
+class FrequencyLoss(nn.Module):
+    def __init__(self):
+        super(FrequencyLoss, self).__init__()
+        self.criterion = nn.L1Loss()
+
+    def forward(self, pred, target):
+        # 1. 维度调整：将 3D [B, C, D, H, W] 展平为 2D 切片堆叠 [B*D, C, H, W]
+        b, c, d, h, w = pred.shape
+        pred_2d = pred.view(b * d, c, h, w)
+        target_2d = target.view(b * d, c, h, w)
+
+        # 2. 快速傅里叶变换 (RFFT)
+        # norm='ortho' 保证能量守恒
+        pred_fft = torch.fft.rfft2(pred_2d, norm='ortho')
+        target_fft = torch.fft.rfft2(target_2d, norm='ortho')
+
+        # 3. 计算振幅谱 (Amplitude Spectrum)
+        pred_amp = torch.abs(pred_fft)
+        target_amp = torch.abs(target_fft)
+
+        # 4. 计算 Log 振幅距离 (Log-Frequency Distance)
+        # 加 1.0 防止 log(0) 导致的 NaN
+        return self.criterion(torch.log(pred_amp + 1.0), torch.log(target_amp + 1.0))
+
+
+# =========================================================================
 # [主类] Augan Model
 # =========================================================================
 class AuganModel(BaseModel):
@@ -57,10 +86,9 @@ class AuganModel(BaseModel):
 
     def __init__(self, opt):
         BaseModel.__init__(self, opt)
-        # 定义 Loss 名称，用于日志打印
-        # 注意：只有权重 > 0 的 Loss 才会真正计算，但这里我们列出所有可能的 Loss
-        self.loss_names = ['G_GAN', 'G_Pixel', 'G_Edge', 'G_Perceptual', 'G_TV', 'G_SSIM','D_Real', 'D_Fake']
-        # self.loss_names = ['G_GAN', 'G_Pixel','D_Real', 'D_Fake']
+        # 定义 Loss 名称
+        # self.loss_names = ['G_GAN', 'G_Pixel', 'G_Edge', 'G_Perceptual', 'G_TV', 'G_SSIM','G_FFL','D_Real', 'D_Fake']
+        self.loss_names = ['G_GAN', 'G_Pixel', 'G_Edge', 'G_Perceptual', 'G_TV', 'G_SSIM', 'G_FFL', 'G_BG', 'D_Real', 'D_Fake']
         # 定义可视化图片
         self.visual_names = ['real_lq', 'fake_hq', 'real_sq'] 
         
@@ -69,44 +97,51 @@ class AuganModel(BaseModel):
         else:
             self.model_names = ['G']
 
-        # 定义生成器
+        # =========================================================================
+        # [修复核心]: 定义生成器 (必须放在 if self.isTrain 之外！)
+        # =========================================================================
+        # 安全获取参数，防止测试时 opt 缺少某些属性
+        use_attn = getattr(opt, 'use_attention', False)
+        attn_temp = getattr(opt, 'attn_temp', 1.0)
+        use_dilation = getattr(opt, 'use_dilation', False)
+        
         self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm,
-                                      not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
+                                      not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids,
+                                      use_attention=use_attn,    # <--- 关键！
+                                      attn_temp=attn_temp,       # <--- 关键！
+                                      use_dilation=use_dilation) # <--- 关键！
 
+        # =========================================================================
+        # 仅训练模式下定义判别器和 Loss
+        # =========================================================================
         if self.isTrain:
             # 定义判别器
             self.netD = networks.define_D(opt.input_nc + opt.output_nc, opt.ndf, opt.netD,
                                           n_layers_D=3, norm=opt.norm, init_type=opt.init_type, init_gain=opt.init_gain, gpu_ids=self.gpu_ids)
 
-            # models/augan_model.py
-
-            # 定义生成器
-            # [Exp 30 修改]: 显式传递 use_attention, attn_temp, use_dilation
-            self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm,
-                                        not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids,
-                                        use_attention=opt.use_attention,  # 确保 attention 开关被传递
-                                        attn_temp=opt.attn_temp,          # 传递锐化温度
-                                        use_dilation=opt.use_dilation     # 传递空洞卷积开关
-                                        )
-                
             # --- 定义 Loss 函数 ---
             # 1. GAN Loss
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
             # 2. Pixel Loss
             self.criterionPixel = torch.nn.L1Loss() 
-            # 3. TV Loss (仅初始化，具体是否计算取决于 lambda_tv)
+            # 3. TV Loss
             self.criterionTV = TVLoss(weight=1.0).to(self.device)
-            # 4. Perceptual Loss (仅当需要时初始化，节省显存)
+            # 4. Perceptual Loss
             if opt.lambda_perceptual > 0:
                 self.netVGG = VGG19FeatureExtractor().to(self.device)
                 self.criterionPerceptual = torch.nn.L1Loss()
+            # 5. SSIM Loss
             if opt.lambda_ssim > 0:
                 self.criterionSSIM = SSIMLoss().to(self.device)
+            # [Exp 35/36 新增]: FFL 初始化
+            if opt.lambda_ffl > 0:
+                self.criterionFFL = FrequencyLoss().to(self.device)    
             # --- 优化器 ---
             self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr * opt.lr_d_ratio, betas=(opt.beta1, 0.999))
             self.optimizers.append(self.optimizer_G)
             self.optimizers.append(self.optimizer_D)
+
 
     def set_input(self, input):
         self.real_lq = input['lq'].to(self.device)
@@ -192,10 +227,33 @@ class AuganModel(BaseModel):
             self.loss_G_SSIM = self.criterionSSIM(fake_2d, real_2d) * self.opt.lambda_ssim
         else:
             self.loss_G_SSIM = torch.tensor(0.0).to(self.device)
-        
-        
+            
+        # [Exp 35/36 新增] 7. Frequency Loss (FFL)
+        if self.opt.lambda_ffl > 0:
+            self.loss_G_FFL = self.criterionFFL(self.fake_hq, self.real_sq) * self.opt.lambda_ffl
+        else:
+            self.loss_G_FFL = torch.tensor(0.0).to(self.device)
+        # =================================================================
+        # [Exp 37 新增] 8. Background Suppression Loss (背景抑制)
+        # 逻辑: 找出 GT 中接近纯黑的区域 (< -0.9)，对该区域的 L1 误差加权惩罚
+        # =================================================================
+        if self.opt.lambda_bg > 0:
+            # 1. 制作背景掩码 (Mask): 假设数据归一化到 [-1, 1], 背景接近 -1
+            # 这里选取 -0.8 作为阈值，小于 -0.8 的都是背景
+            bg_mask = (self.real_sq < -0.8).float().detach()
+            
+            # 2. 计算掩码区域内的 L1 Loss
+            # 公式: mean( abs(fake - real) * mask )
+            loss_bg_raw = torch.mean(torch.abs(self.fake_hq - self.real_sq) * bg_mask)
+            
+            # 3. 加权
+            self.loss_G_BG = loss_bg_raw * self.opt.lambda_bg
+        else:
+            self.loss_G_BG = torch.tensor(0.0).to(self.device)
         # 总 Loss 求和
-        self.loss_G = self.loss_G_GAN + self.loss_G_Pixel + self.loss_G_Edge + self.loss_G_Perceptual + self.loss_G_TV + self.loss_G_SSIM
+        # self.loss_G = self.loss_G_GAN + self.loss_G_Pixel + self.loss_G_Edge + self.loss_G_Perceptual + self.loss_G_TV + self.loss_G_SSIM
+        # self.loss_G = self.loss_G_GAN + self.loss_G_Pixel + self.loss_G_Edge + self.loss_G_Perceptual + self.loss_G_TV + self.loss_G_SSIM + self.loss_G_FFL
+        self.loss_G = self.loss_G_GAN + self.loss_G_Pixel + self.loss_G_Edge + self.loss_G_Perceptual + self.loss_G_TV + self.loss_G_SSIM + self.loss_G_FFL + self.loss_G_BG
         self.loss_G.backward()
 
     def optimize_parameters(self):
