@@ -73,7 +73,7 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
     
     # [关键修改] ResUnet 3D: 传递 attn_temp 和 use_dilation
     elif netG == 'res_unet_3d':
-        net = ResUnetGenerator(input_nc, output_nc, 6, ngf, norm_layer=norm_layer, use_dropout=use_dropout, is_3d=True, use_attention=use_attention, attn_temp=attn_temp, use_dilation=use_dilation, use_aspp=use_aspp)
+        net = ResUnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, is_3d=True, use_attention=use_attention, attn_temp=attn_temp, use_dilation=use_dilation, use_aspp=use_aspp)
         
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
