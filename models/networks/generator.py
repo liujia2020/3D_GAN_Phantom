@@ -154,33 +154,66 @@ class ASPP3D(nn.Module):
         
         return result
     
-
 class ResUnetGenerator(nn.Module):
     """
-    [Exp 30 核心]: ResUnet Generator
+    [Exp 30 核心]: ResUnet Generator (修正版)
     """
-    def __init__(self, input_nc, output_nc, num_downs, ngf=64, norm_layer=nn.BatchNorm3d, use_dropout=False, is_3d=True, use_attention=False, attn_temp=1.0, use_dilation=False, use_aspp=False):
+    # 修正点1: 恢复参数顺序 (ngf 在前) 和名称 (n_blocks)
+    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm3d, use_dropout=False, n_blocks=6, padding_type='reflect', use_attention=False, attn_temp=5.0, use_dilation=False, use_aspp=False):
+        assert(n_blocks >= 0)
         super(ResUnetGenerator, self).__init__()
+        self.input_nc = input_nc
+        self.output_nc = output_nc
+        self.ngf = ngf
         
-        # 1. Innermost (最内层): 强制 dilation=1
-        unet_block = ResUnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, innermost=True, is_3d=is_3d, use_attention=False, attn_temp=attn_temp, dilation=1)
+        # 1. Innermost (最内层): 强制 dilation=1，【开启 ASPP】
+        # 修正点2: 正确传递 use_aspp
+        unet_block = ResUnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, innermost=True, is_3d=True, use_attention=False, attn_temp=attn_temp, dilation=1, use_aspp=use_aspp)
         
         # 2. Intermediate blocks (深层中间层): 根据 use_dilation 开关决定是否开启 dilation=2
         mid_dilation = 2 if use_dilation else 1
         
-        for i in range(num_downs - 5):
-            unet_block = ResUnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout, is_3d=is_3d, use_attention=use_attention, attn_temp=attn_temp, dilation=mid_dilation, use_aspp=use_aspp)
+        # 修正点3: 使用 n_blocks 进行循环
+        for i in range(n_blocks - 5):
+            # 注意: 中间层不需要 use_aspp，它是 False (默认值)
+            unet_block = ResUnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout, is_3d=True, use_attention=use_attention, attn_temp=attn_temp, dilation=mid_dilation)
         
         # 3. Up-sampling blocks (浅层): 保持 dilation=1
-        unet_block = ResUnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, is_3d=is_3d, use_attention=use_attention, attn_temp=attn_temp, dilation=1)
+        unet_block = ResUnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, is_3d=True, use_attention=use_attention, attn_temp=attn_temp, dilation=1)
         unet_block = ResUnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer, is_3d=is_3d, use_attention=use_attention, attn_temp=attn_temp, dilation=1)
         unet_block = ResUnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer, is_3d=is_3d, use_attention=use_attention, attn_temp=attn_temp, dilation=1)
         
         # Outermost block
-        self.model = ResUnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer, is_3d=is_3d, use_attention=use_attention, attn_temp=attn_temp, dilation=1)
+        self.model = ResUnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer, is_3d=True, use_attention=use_attention, attn_temp=attn_temp, dilation=1)
 
     def forward(self, input):
         return self.model(input)
+# class ResUnetGenerator(nn.Module):
+#     """
+#     [Exp 30 核心]: ResUnet Generator
+#     """
+#     def __init__(self, input_nc, output_nc, num_downs, ngf=64, norm_layer=nn.BatchNorm3d, use_dropout=False, is_3d=True, use_attention=False, attn_temp=1.0, use_dilation=False, use_aspp=False):
+#         super(ResUnetGenerator, self).__init__()
+        
+#         # 1. Innermost (最内层): 强制 dilation=1
+#         unet_block = ResUnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, innermost=True, is_3d=is_3d, use_attention=False, attn_temp=attn_temp, dilation=1, use_aspp=use_aspp)
+        
+#         # 2. Intermediate blocks (深层中间层): 根据 use_dilation 开关决定是否开启 dilation=2
+#         mid_dilation = 2 if use_dilation else 1
+        
+#         for i in range(num_downs - 5):
+#             unet_block = ResUnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout, is_3d=is_3d, use_attention=use_attention, attn_temp=attn_temp, dilation=mid_dilation, use_aspp=use_aspp)
+        
+#         # 3. Up-sampling blocks (浅层): 保持 dilation=1
+#         unet_block = ResUnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, is_3d=is_3d, use_attention=use_attention, attn_temp=attn_temp, dilation=1)
+#         unet_block = ResUnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer, is_3d=is_3d, use_attention=use_attention, attn_temp=attn_temp, dilation=1)
+#         unet_block = ResUnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer, is_3d=is_3d, use_attention=use_attention, attn_temp=attn_temp, dilation=1)
+        
+#         # Outermost block
+#         self.model = ResUnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer, is_3d=is_3d, use_attention=use_attention, attn_temp=attn_temp, dilation=1)
+
+#     def forward(self, input):
+#         return self.model(input)
 
 
 # class ResUnetSkipConnectionBlock(nn.Module):
