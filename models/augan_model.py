@@ -105,12 +105,15 @@ class AuganModel(BaseModel):
         attn_temp = getattr(opt, 'attn_temp', 1.0)
         use_dilation = getattr(opt, 'use_dilation', False)
         
+        # self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm,
+        #                               not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids,
+        #                               use_attention=use_attn,    # <--- 关键！
+        #                               attn_temp=attn_temp,       # <--- 关键！
+        #                               use_dilation=use_dilation) # <--- 关键！
         self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm,
-                                      not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids,
-                                      use_attention=use_attn,    # <--- 关键！
-                                      attn_temp=attn_temp,       # <--- 关键！
-                                      use_dilation=use_dilation) # <--- 关键！
-
+                              not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids,
+                              use_attention=opt.use_attention, attn_temp=opt.attn_temp, 
+                              use_dilation=opt.use_dilation, use_aspp=self.opt.use_aspp) # <--- 新增
         # =========================================================================
         # 仅训练模式下定义判别器和 Loss
         # =========================================================================

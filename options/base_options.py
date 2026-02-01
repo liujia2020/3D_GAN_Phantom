@@ -53,6 +53,9 @@ class BaseOptions():
         # =========================================================
         parser.add_argument('--attn_temp', type=float, default=1.0, help='temperature for attention sharpening (default: 1.0)')
         parser.add_argument('--use_dilation', action='store_true', help='if specified, use dilated convolutions in the bottleneck')
+        # 找到 parser.add_argument('--use_dilation', ...) 这一行，在它下面添加：
+
+        parser.add_argument('--use_aspp', action='store_true', help='use ASPP module in the innermost layer of generator')
         parser.add_argument('--lambda_bg', type=float, default=0.0, help='weight for background suppression loss')
         parser.add_argument('--lambda_ffl', type=float, default=0.0, help='weight for focal frequency loss (e.g., 0.1)')
         # =========================================================

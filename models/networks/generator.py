@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import functools
-
+import torch.nn.functional as F
 # ==========================================================
 # Part 1: 新的核心组件 (Exp 30: ResUnet & Attention)
 # ==========================================================
@@ -84,12 +84,82 @@ class LocalAwareAttention(nn.Module):
         psi = self.psi(psi)
         return x * psi
 
+class ASPP3D(nn.Module):
+    """
+    3D Atrous Spatial Pyramid Pooling Module
+    Rates: [1, 2, 4, 8] - Optimized for small 3D feature maps
+    """
+    def __init__(self, in_channels, out_channels, norm_layer=nn.BatchNorm3d):
+        super(ASPP3D, self).__init__()
+        
+        # 1. 1x1 Convolution
+        self.branch1 = nn.Sequential(
+            nn.Conv3d(in_channels, out_channels, kernel_size=1, bias=False),
+            norm_layer(out_channels),
+            nn.LeakyReLU(0.2, True)
+        )
+        
+        # 2. 3x3 Convolution with dilation 2
+        self.branch2 = nn.Sequential(
+            nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=2, dilation=2, bias=False),
+            norm_layer(out_channels),
+            nn.LeakyReLU(0.2, True)
+        )
+        
+        # 3. 3x3 Convolution with dilation 4
+        self.branch3 = nn.Sequential(
+            nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=4, dilation=4, bias=False),
+            norm_layer(out_channels),
+            nn.LeakyReLU(0.2, True)
+        )
+        
+        # 4. 3x3 Convolution with dilation 8
+        self.branch4 = nn.Sequential(
+            nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=8, dilation=8, bias=False),
+            norm_layer(out_channels),
+            nn.LeakyReLU(0.2, True)
+        )
+        
+        # 5. Global Average Pooling Branch
+        self.branch5_conv = nn.Sequential(
+            nn.Conv3d(in_channels, out_channels, kernel_size=1, bias=False),
+            norm_layer(out_channels),
+            nn.LeakyReLU(0.2, True)
+        )
+
+        # Fusion Layer
+        self.conv_cat = nn.Sequential(
+            nn.Conv3d(out_channels * 5, out_channels, kernel_size=1, bias=False),
+            norm_layer(out_channels),
+            nn.LeakyReLU(0.2, True)
+        )
+
+    def forward(self, x):
+        [b, c, d, h, w] = x.size()
+        
+        # Five branches
+        conv1x1 = self.branch1(x)
+        conv3x3_d2 = self.branch2(x)
+        conv3x3_d4 = self.branch3(x)
+        conv3x3_d8 = self.branch4(x)
+        
+        # Global Pooling Branch
+        global_feature = F.adaptive_avg_pool3d(x, (1, 1, 1))
+        global_feature = self.branch5_conv(global_feature)
+        global_feature = F.interpolate(global_feature, size=(d, h, w), mode='trilinear', align_corners=True)
+        
+        # Concatenate and Fuse
+        feature_cat = torch.cat([conv1x1, conv3x3_d2, conv3x3_d4, conv3x3_d8, global_feature], dim=1)
+        result = self.conv_cat(feature_cat)
+        
+        return result
+    
 
 class ResUnetGenerator(nn.Module):
     """
     [Exp 30 核心]: ResUnet Generator
     """
-    def __init__(self, input_nc, output_nc, num_downs, ngf=64, norm_layer=nn.BatchNorm3d, use_dropout=False, is_3d=True, use_attention=False, attn_temp=1.0, use_dilation=False):
+    def __init__(self, input_nc, output_nc, num_downs, ngf=64, norm_layer=nn.BatchNorm3d, use_dropout=False, is_3d=True, use_attention=False, attn_temp=1.0, use_dilation=False, use_aspp=False):
         super(ResUnetGenerator, self).__init__()
         
         # 1. Innermost (最内层): 强制 dilation=1
@@ -99,7 +169,7 @@ class ResUnetGenerator(nn.Module):
         mid_dilation = 2 if use_dilation else 1
         
         for i in range(num_downs - 5):
-            unet_block = ResUnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout, is_3d=is_3d, use_attention=use_attention, attn_temp=attn_temp, dilation=mid_dilation)
+            unet_block = ResUnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout, is_3d=is_3d, use_attention=use_attention, attn_temp=attn_temp, dilation=mid_dilation, use_aspp=use_aspp)
         
         # 3. Up-sampling blocks (浅层): 保持 dilation=1
         unet_block = ResUnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, is_3d=is_3d, use_attention=use_attention, attn_temp=attn_temp, dilation=1)
@@ -113,12 +183,88 @@ class ResUnetGenerator(nn.Module):
         return self.model(input)
 
 
+# class ResUnetSkipConnectionBlock(nn.Module):
+#     """
+#     [Exp 30 核心]: ResUnet Block (使用 Upsample+Conv 替代 ConvTrans)
+#     """
+#     def __init__(self, outer_nc, inner_nc, input_nc=None,
+#                  submodule=None, outermost=False, innermost=False, norm_layer=nn.BatchNorm3d, use_dropout=False, is_3d=True, use_attention=False, attn_temp=1.0, dilation=1):
+#         super(ResUnetSkipConnectionBlock, self).__init__()
+#         self.outermost = outermost
+#         self.innermost = innermost
+#         self.use_attention = use_attention
+#         self.is_3d = is_3d
+
+#         if input_nc is None: input_nc = outer_nc
+        
+#         Conv = nn.Conv3d if is_3d else nn.Conv2d
+#         use_bias = norm_layer == nn.InstanceNorm3d
+
+#         # Downsample
+#         downconv = Conv(input_nc, inner_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+#         downrelu = nn.LeakyReLU(0.2, False)
+#         downnorm = norm_layer(inner_nc)
+#         uprelu = nn.ReLU(False)
+#         upnorm = norm_layer(outer_nc)
+        
+#         # ResBlock (with dilation)
+#         enc_res_block = ResnetBlock3D(inner_nc, norm_layer, use_dropout, use_bias, dilation=dilation)
+#         dec_res_block = ResnetBlock3D(outer_nc, norm_layer, use_dropout, use_bias, dilation=dilation)
+
+#         # Upsample (Upsample + Conv)
+#         if outermost:
+#             up_layer = nn.Sequential(
+#                 nn.Upsample(scale_factor=2, mode='trilinear' if is_3d else 'bilinear', align_corners=False),
+#                 Conv(inner_nc * 2, outer_nc, kernel_size=3, stride=1, padding=1, bias=True)
+#             )
+#             down = [downconv, enc_res_block] 
+#             up = [uprelu, up_layer, nn.Tanh()] 
+#             model = down + [submodule] + up
+            
+#         elif innermost:
+#             up_layer = nn.Sequential(
+#                 nn.Upsample(scale_factor=2, mode='trilinear' if is_3d else 'bilinear', align_corners=False),
+#                 Conv(inner_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias)
+#             )
+#             down = [downrelu, downconv, enc_res_block] 
+#             up = [uprelu, up_layer, upnorm, dec_res_block] 
+#             model = down + up
+            
+#         else:
+#             up_layer = nn.Sequential(
+#                 nn.Upsample(scale_factor=2, mode='trilinear' if is_3d else 'bilinear', align_corners=False),
+#                 Conv(inner_nc * 2, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias)
+#             )
+#             down = [downrelu, downconv, downnorm, enc_res_block]
+#             up = [uprelu, up_layer, upnorm, dec_res_block]
+#             if use_dropout:
+#                 model = down + [submodule] + up + [nn.Dropout(0.5)]
+#             else:
+#                 model = down + [submodule] + up
+
+#         self.model = nn.Sequential(*model)
+
+#         if self.use_attention and not self.innermost:
+#             self.pa = PixelAwareAttention(input_nc, is_3d=is_3d, temperature=attn_temp)
+#             self.laa = LocalAwareAttention(F_g=outer_nc, F_l=input_nc, F_int=max(input_nc//2, 1), is_3d=is_3d)
+
+#     def forward(self, x):
+#         if self.outermost: return self.model(x)
+#         else:
+#             decoder_feature = self.model(x) 
+#             skip_feature = x
+#             if self.use_attention and not self.innermost:
+#                 skip_feature = self.pa(skip_feature)
+#                 skip_feature = self.laa(g=decoder_feature, x=skip_feature)
+#             return torch.cat([skip_feature, decoder_feature], 1)
+
 class ResUnetSkipConnectionBlock(nn.Module):
     """
     [Exp 30 核心]: ResUnet Block (使用 Upsample+Conv 替代 ConvTrans)
     """
+    # ⬇️ 修改点 1: 在最后添加 use_aspp=False
     def __init__(self, outer_nc, inner_nc, input_nc=None,
-                 submodule=None, outermost=False, innermost=False, norm_layer=nn.BatchNorm3d, use_dropout=False, is_3d=True, use_attention=False, attn_temp=1.0, dilation=1):
+                 submodule=None, outermost=False, innermost=False, norm_layer=nn.BatchNorm3d, use_dropout=False, is_3d=True, use_attention=False, attn_temp=1.0, dilation=1, use_aspp=False): 
         super(ResUnetSkipConnectionBlock, self).__init__()
         self.outermost = outermost
         self.innermost = innermost
@@ -156,9 +302,18 @@ class ResUnetSkipConnectionBlock(nn.Module):
                 nn.Upsample(scale_factor=2, mode='trilinear' if is_3d else 'bilinear', align_corners=False),
                 Conv(inner_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias)
             )
-            down = [downrelu, downconv, enc_res_block] 
-            up = [uprelu, up_layer, upnorm, dec_res_block] 
-            model = down + up
+            
+            # ⬇️ 修改点 2: 插入 ASPP 逻辑
+            if use_aspp:
+                # 方案 A: 使用 ASPP 替代中间的 ResBlock
+                # 结构: Down(Act+Conv) -> ASPP -> Up(Upsample+Conv) -> Norm
+                aspp_layer = ASPP3D(inner_nc, inner_nc, norm_layer=norm_layer)
+                model = [downrelu, downconv, aspp_layer, up_layer, upnorm]
+            else:
+                # 方案 B: 你的原始逻辑
+                down = [downrelu, downconv, enc_res_block] 
+                up = [uprelu, up_layer, upnorm, dec_res_block] 
+                model = down + up
             
         else:
             up_layer = nn.Sequential(
@@ -187,7 +342,6 @@ class ResUnetSkipConnectionBlock(nn.Module):
                 skip_feature = self.pa(skip_feature)
                 skip_feature = self.laa(g=decoder_feature, x=skip_feature)
             return torch.cat([skip_feature, decoder_feature], 1)
-
 
 # ==========================================================
 # Part 2: 遗留兼容组件 (Standard Unet) - [必须保留以防报错]
