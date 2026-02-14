@@ -4,14 +4,14 @@ from torch.nn import init
 import functools
 from torch.optim import lr_scheduler
 
-# 1. 导入 Generator
-from .generator import UnetGenerator3D
+# 1. 导入 Generator (只保留 ResUnetGenerator)
+from .generator import ResUnetGenerator
 
 # 2. 导入 Discriminator
 from .discriminator import NLayerDiscriminator3D
-from .generator import UnetGenerator3D, UnetGenerator, ResUnetGenerator
+
 # ==============================================================================
-# [核心修复] get_scheduler (之前缺失的函数)
+# [核心修复] get_scheduler
 # ==============================================================================
 def get_scheduler(optimizer, opt):
     """Return a learning rate scheduler"""
@@ -31,7 +31,7 @@ def get_scheduler(optimizer, opt):
     return scheduler
 
 # ==============================================================================
-# [补丁] PixelDiscriminator3D (保留着防止报错，但这次不用它)
+# [补丁] PixelDiscriminator3D
 # ==============================================================================
 class PixelDiscriminator3D(nn.Module):
     def __init__(self, input_nc, ndf=64, norm_layer=nn.BatchNorm3d, use_sigmoid=False):
@@ -56,8 +56,9 @@ class PixelDiscriminator3D(nn.Module):
     def forward(self, input):
         return self.net(input)
 
-# models/networks/__init__.py
-
+# ==============================================================================
+# define_G (已清理)
+# ==============================================================================
 def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[], use_attention=False, attn_temp=1.0, use_dilation=False, use_aspp=False):
     """
     [Exp 30 修改]: 增加了 attn_temp 和 use_dilation 参数
@@ -65,20 +66,13 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
     net = None
     norm_layer = get_norm_layer(norm_type=norm)
 
-    if netG == 'unet_128':
-        net = UnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
-    
-    elif netG == 'unet_3d':
-        net = UnetGenerator(input_nc, output_nc, 6, ngf, norm_layer=norm_layer, use_dropout=use_dropout, use_attention=use_attention)
-    
-    # [关键修改] ResUnet 3D: 传递 attn_temp 和 use_dilation
-    elif netG == 'res_unet_3d':
+    if netG == 'res_unet_3d':
         net = ResUnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, use_attention=use_attention, attn_temp=attn_temp, use_dilation=use_dilation, use_aspp=use_aspp)
-        
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
         
     return init_net(net, init_type, init_gain, gpu_ids)
+
 # ==============================================================================
 # define_D
 # ==============================================================================
@@ -96,7 +90,7 @@ def define_D(input_nc, ndf, netD, n_layers_D=3, norm='batch', use_sigmoid=False,
     return init_net(net, init_type, init_gain, gpu_ids)
 
 # ==============================================================================
-# 辅助函数
+# 辅助函数 (含警告修复)
 # ==============================================================================
 def get_norm_layer(norm_type='instance'):
     if norm_type == 'batch':
@@ -106,7 +100,7 @@ def get_norm_layer(norm_type='instance'):
     elif norm_type == 'group':
         norm_layer = functools.partial(nn.GroupNorm, 32)
     elif norm_type == 'none':
-        def norm_layer(x): return nn.Identity()
+        return nn.Identity
     else:
         raise NotImplementedError('normalization layer [%s] is not found' % norm_type)
     return norm_layer
@@ -116,21 +110,29 @@ def init_weights(net, init_type='normal', init_gain=0.02):
     def init_func(m):
         classname = m.__class__.__name__
         if hasattr(m, 'weight') and (classname.find('Conv') != -1 or classname.find('Linear') != -1):
-            if init_type == 'normal':
-                init.normal_(m.weight.data, 0.0, init_gain)
-            elif init_type == 'xavier':
-                init.xavier_normal_(m.weight.data, gain=init_gain)
-            elif init_type == 'kaiming':
-                init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
-            elif init_type == 'orthogonal':
-                init.orthogonal_(m.weight.data, gain=init_gain)
-            else:
-                raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
-            if hasattr(m, 'bias') and m.bias is not None:
+            # [修复] 增加 .numel() > 0 判断，防止对空 Tensor 初始化引发警告
+            if m.weight.numel() > 0:
+                if init_type == 'normal':
+                    init.normal_(m.weight.data, 0.0, init_gain)
+                elif init_type == 'xavier':
+                    init.xavier_normal_(m.weight.data, gain=init_gain)
+                elif init_type == 'kaiming':
+                    init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
+                elif init_type == 'orthogonal':
+                    init.orthogonal_(m.weight.data, gain=init_gain)
+                else:
+                    raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
+            
+            # [修复] 同理，检查 bias
+            if hasattr(m, 'bias') and m.bias is not None and m.bias.numel() > 0:
                 init.constant_(m.bias.data, 0.0)
+                
         elif classname.find('BatchNorm3d') != -1:
-            init.normal_(m.weight.data, 1.0, init_gain)
-            init.constant_(m.bias.data, 0.0)
+            if m.weight.numel() > 0:
+                init.normal_(m.weight.data, 1.0, init_gain)
+            if m.bias is not None and m.bias.numel() > 0:
+                init.constant_(m.bias.data, 0.0)
+                
     net.apply(init_func)
 
 def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
