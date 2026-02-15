@@ -6,14 +6,8 @@ class TrainOptions(BaseOptions):
     def initialize(self, parser):
         parser = BaseOptions.initialize(self, parser)
         
-        # === [核心修改] Loss 权重 ===
-        parser.add_argument('--lambda_gan', type=float, default=1.0, help='weight for GAN loss')
-        parser.add_argument('--lambda_pixel', type=float, default=100.0, help='weight for pixel loss (L1)')
-        parser.add_argument('--lambda_perceptual', type=float, default=0.0, help='weight for perceptual loss (VGG)')
-        parser.add_argument('--lambda_tv', type=float, default=0.0, help='weight for TV loss')
-        parser.add_argument('--lambda_edge', type=float, default=0.0, help='weight for edge loss')
-        parser.add_argument('--lambda_ssim', type=float, default=0.0, help='weight for SSIM loss')
-        # =======================================
+        # [注意] Loss 权重参数 (lambda_gan, lambda_pixel 等) 已移至 models/augan_model.py 定义
+        # 此处不再重复定义，以避免 conflicting option string 报错
 
         parser.add_argument('--display_freq', type=int, default=400, help='frequency of showing training results on screen')
         parser.add_argument('--print_freq', type=int, default=100, help='frequency of showing training results on console')

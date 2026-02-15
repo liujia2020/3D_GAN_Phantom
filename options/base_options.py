@@ -56,8 +56,8 @@ class BaseOptions():
         # 找到 parser.add_argument('--use_dilation', ...) 这一行，在它下面添加：
 
         parser.add_argument('--use_aspp', action='store_true', help='use ASPP module in the innermost layer of generator')
-        parser.add_argument('--lambda_bg', type=float, default=0.0, help='weight for background suppression loss')
-        parser.add_argument('--lambda_ffl', type=float, default=0.0, help='weight for focal frequency loss (e.g., 0.1)')
+        # parser.add_argument('--lambda_bg', type=float, default=0.0, help='weight for background suppression loss')
+        # parser.add_argument('--lambda_ffl', type=float, default=0.0, help='weight for focal frequency loss (e.g., 0.1)')
         # =========================================================
         # 3D 相关参数
         parser.add_argument('--patch_size_d', type=int, default=64, help='crop size d')
