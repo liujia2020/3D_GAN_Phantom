@@ -6,11 +6,9 @@ from . import networks
 
 class LossHelper(nn.Module):
     """
-    [新增组件] LossHelper
-    职责:
-    1. 集中管理所有 Loss 的初始化 (GAN, L1, TV, Freq, VGG, SSIM)
-    2. 自动处理 3D 数据的维度变形 (Reshape)，确保 2D Loss (SSIM/VGG) 不会报错
-    3. 提供统一的计算接口 compute_G_loss
+    [Exp42 复刻版] LossHelper
+    1. 增加了 BG Loss (背景抑制) 的计算逻辑
+    2. 在 VGG/SSIM 预处理中增加了 clamp(0, 1)，防止 NaN
     """
     def __init__(self, opt, device):
         super(LossHelper, self).__init__()
@@ -18,8 +16,6 @@ class LossHelper(nn.Module):
         self.device = device
         
         # 1. 初始化 Loss 函数
-        # -----------------------------------------------------------
-        # GAN Loss (自动判断 use_lsgan)
         use_lsgan = True
         if hasattr(opt, 'gan_mode'):
             use_lsgan = (opt.gan_mode == 'lsgan')
@@ -38,82 +34,84 @@ class LossHelper(nn.Module):
     def compute_G_loss(self, netD, fake_sq, real_sq, input_lq):
         """
         计算 Generator 的所有 Loss
-        返回: (total_loss, loss_dict)
         """
         loss_dict = {}
         total_loss = 0.0
         
         # 1. GAN Loss
-        # -----------------------------------------------------------
         fake_AB = torch.cat((input_lq, fake_sq), 1)
         pred_fake = netD(fake_AB)
         loss_G_GAN = self.criterionGAN(pred_fake, True) * self.opt.lambda_gan
-        
         loss_dict['G_GAN'] = loss_G_GAN
         total_loss += loss_G_GAN
         
         # 2. Pixel Loss (L1)
-        # -----------------------------------------------------------
         loss_G_L1 = self.criterionL1(fake_sq, real_sq) * self.opt.lambda_pixel
-        
         loss_dict['G_L1'] = loss_G_L1
         total_loss += loss_G_L1
         
         # 3. TV Loss
-        # -----------------------------------------------------------
         if self.criterionTV:
             loss_TV = self.criterionTV(fake_sq) * self.opt.lambda_tv
             loss_dict['G_TV'] = loss_TV
             total_loss += loss_TV
             
         # 4. Frequency Loss
-        # -----------------------------------------------------------
         if self.criterionFreq:
             loss_Freq = self.criterionFreq(fake_sq, real_sq) * self.opt.lambda_ffl
             loss_dict['G_Freq'] = loss_Freq
             total_loss += loss_Freq
             
-        # 5. VGG Loss (修复：先提取特征，再算距离)
+        # 5. BG Loss (背景抑制) - [复活]
+        # -----------------------------------------------------------
+        if self.opt.lambda_bg > 0:
+            # 逻辑: 找出 GT 中接近纯黑的区域 (< -0.9)，对该区域的 L1 误差加权惩罚
+            # 假设数据归一化到 [-1, 1], 背景接近 -1
+            bg_mask = (real_sq < -0.9).float().detach()
+            
+            # 计算掩码区域内的 L1 Loss
+            # 公式: mean( abs(fake - real) * mask )
+            loss_bg_raw = torch.mean(torch.abs(fake_sq - real_sq) * bg_mask)
+            
+            loss_BG = loss_bg_raw * self.opt.lambda_bg
+            loss_dict['G_BG'] = loss_BG
+            total_loss += loss_BG
+
+        # 6. VGG Loss (特征感知)
         # -----------------------------------------------------------
         if self.criterionVGG:
-            # 预处理: 反归一化 + 维度变形
+            # 预处理: 反归一化 + Clamp + 维度变形
             fake_2d, real_2d = self._preprocess_for_2d_loss(fake_sq, real_sq, need_3channel=True)
             
-            # 分别提取特征 (forward 只接受一个参数)
+            # 提取特征
             fake_features = self.criterionVGG(fake_2d)
             real_features = self.criterionVGG(real_2d)
             
-            # 计算 L1 距离 (兼容列表返回或单张量返回)
             loss_VGG = 0
             if isinstance(fake_features, list):
-                # 如果是多层特征
                 for f, r in zip(fake_features, real_features):
                     loss_VGG += self.criterionL1(f, r)
             else:
-                # 如果是单层特征
                 loss_VGG = self.criterionL1(fake_features, real_features)
             
             loss_VGG = loss_VGG * self.opt.lambda_perceptual
-            
             loss_dict['G_VGG'] = loss_VGG
             total_loss += loss_VGG
 
-        # 6. SSIM Loss (自动处理 3D -> 2D)
+        # 7. SSIM Loss (结构相似度)
         # -----------------------------------------------------------
         if self.criterionSSIM:
-            # 预处理: 反归一化 + 维度变形 (SSIM不需要强制3通道，单通道即可)
+            # 预处理
             fake_2d, real_2d = self._preprocess_for_2d_loss(fake_sq, real_sq, need_3channel=False)
-            loss_SSIM = self.criterionSSIM(fake_2d, real_2d) * self.opt.lambda_ssim
             
+            # Loss = 1 - SSIM (因为 SSIM 越大越好)
+            loss_SSIM = (1.0 - self.criterionSSIM(fake_2d, real_2d)) * self.opt.lambda_ssim
             loss_dict['G_SSIM'] = loss_SSIM
             total_loss += loss_SSIM
             
         return total_loss, loss_dict
 
     def compute_D_loss(self, netD, fake_sq, real_sq, input_lq):
-        """
-        计算 Discriminator 的 Loss
-        """
         # Fake
         fake_AB = torch.cat((input_lq, fake_sq), 1)
         pred_fake = netD(fake_AB.detach())
@@ -130,13 +128,15 @@ class LossHelper(nn.Module):
     def _preprocess_for_2d_loss(self, fake, real, need_3channel=False):
         """
         私有工具: 将数据转换为适合 2D Loss 的格式
-        1. 反归一化 [-1, 1] -> [0, 1]
-        2. 如果是 3D (B,C,D,H,W) -> Reshape 为 (B*D, C, H, W)
-        3. 如果需要 3通道 -> Repeat
+        [关键修复]: 增加了 clamp(0.0, 1.0) 确保数值稳定
         """
-        # 1. Denorm
+        # 1. Denorm [-1, 1] -> [0, 1]
         fake_01 = (fake + 1.0) / 2.0
         real_01 = (real + 1.0) / 2.0
+        
+        # [安全锁] 确保数值绝对在 0-1 之间，防止微小误差导致 SSIM/VGG 出现 NaN
+        fake_01 = torch.clamp(fake_01, 0.0, 1.0)
+        real_01 = torch.clamp(real_01, 0.0, 1.0)
         
         # 2. Reshape 3D -> 2D
         if fake_01.ndim == 5:

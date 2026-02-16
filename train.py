@@ -9,159 +9,177 @@ from options.train_options import TrainOptions
 from data import create_dataset
 from models import create_model
 
-# === [新增] 引入 Matplotlib 用于专业绘图 ===
+# === [引入 Matplotlib] ===
 import matplotlib
 matplotlib.use('Agg') # 确保在无屏幕服务器上也能运行
 import matplotlib.pyplot as plt
 
 # =========================================================================
-# 辅助函数：Tensor转图 (保持 scale_factor=1 用于 Matplotlib 输入)
+# 辅助函数：Tensor转图 (自动处理 3D 切片)
 # =========================================================================
 def tensor2im_custom(input_image, imtype=np.uint8):
-    if isinstance(input_image, torch.Tensor):
-        image_tensor = input_image.data
-    else:
+    """
+    将 Tensor 转换为 Numpy 图像，自动处理 3D 数据的中间切片
+    """
+    if not isinstance(input_image, torch.Tensor):
         return input_image
     
-    image_numpy = image_tensor[0].cpu().float().numpy()
+    image_tensor = input_image.data
+    image_numpy = image_tensor[0].cpu().float().numpy() # 取 Batch 第一个 -> (C, D, H, W) 或 (C, H, W)
     
-    # 3D -> 2D 切片 (取中间层)
+    # [核心适配] 3D -> 2D 切片
+    # 如果维度是 4 (C, D, H, W)，说明是 3D 数据
     if image_numpy.ndim == 4:
         mid_slice = image_numpy.shape[1] // 2
-        image_numpy = image_numpy[:, mid_slice, :, :]
+        image_numpy = image_numpy[:, mid_slice, :, :] # -> (C, H, W)
         
-    # 单通道 -> RGB
+    # 单通道 -> RGB (复制通道)
     if image_numpy.shape[0] == 1:
         image_numpy = np.tile(image_numpy, (3, 1, 1))
         
-    # 反归一化
+    # 反归一化 (-1, 1) -> (0, 255)
     image_numpy = (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0
     image_numpy = np.clip(image_numpy, 0, 255).astype(imtype)
+    
     return image_numpy
 
-# =========================================================================
-# 辅助函数：计算 PSNR
-# =========================================================================
 def calculate_psnr(img1, img2):
-    mse = np.mean((img1 - img2) ** 2)
-    if mse == 0:
-        return 100
-    PIXEL_MAX = 255.0
-    return 20 * np.log10(PIXEL_MAX / np.sqrt(mse))
+    mse = np.mean((img1.astype(np.float32) - img2.astype(np.float32)) ** 2)
+    if mse == 0: return 100
+    return 20 * np.log10(255.0 / np.sqrt(mse))
 
 # =========================================================================
-# 主训练循环
+# [核心功能] 绘制论文级监控图
+# =========================================================================
+def save_paper_style_fig(save_path, epoch, exp_name, psnr_val, img_lq, img_fake, img_sq):
+    """
+    绘制 Input / Generated / Truth 对比图
+    """
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6.5))
+    
+    header_txt = f"Exp: {exp_name}  |  Epoch: {epoch}  |  Slice PSNR: {psnr_val:.2f} dB"
+    fig.suptitle(header_txt, fontsize=20, fontweight='bold', y=0.92)
+    
+    items = [
+        ('Input (Low Quality)', img_lq),
+        ('Generated (High Quality)', img_fake),
+        ('Ground Truth (High Quality)', img_sq)
+    ]
+    
+    for ax, (title, img) in zip(axes, items):
+        ax.imshow(img)
+        ax.set_title(title, fontsize=16, pad=10, fontweight='medium')
+        ax.axis('off') 
+    
+    plt.subplots_adjust(top=0.85, wspace=0.05, left=0.02, right=0.98, bottom=0.02)
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+# =========================================================================
+# 主训练逻辑
 # =========================================================================
 if __name__ == '__main__':
     opt = TrainOptions().parse()
+    
+    print("\n" + "="*80)
+    print(f"🚀 训练启动 | 实验: {opt.name}")
+    print(f"📂 数据路径: {opt.dataroot}")
+    print("="*80 + "\n")
+
     dataset = create_dataset(opt)
-    dataset_size = len(dataset)
-    print(f'The number of training images = {dataset_size}')
-
+    dataset_size = len(dataset) * opt.batch_size 
+    
     model = create_model(opt)
-    model.setup(opt) # 这里会自动打印网络结构
-
-    total_iters = 0
+    model.setup(opt)
     
-    # [CSV] 初始化日志文件
     expr_dir = os.path.join(opt.checkpoints_dir, opt.name)
-    if not os.path.exists(expr_dir):
-        os.makedirs(expr_dir)
+    if not os.path.exists(expr_dir): os.makedirs(expr_dir)
     log_name = os.path.join(expr_dir, 'loss_log.csv')
+    loss_names = model.loss_names 
     
-    # 获取 loss 名字用于表头
-    loss_names = model.loss_names
-    
-    if not os.path.exists(log_name):
+    if not opt.continue_train or not os.path.exists(log_name):
         with open(log_name, mode='w', newline='') as f:
-            header = ['epoch', 'time'] + loss_names + ['psnr_train', 'lr']
+            header = ['Epoch', 'Time(s)'] + loss_names + ['PSNR', 'LR']
             csv.writer(f).writerow(header)
 
-    print(">>> Start Training Loop...")
-
+    total_iters = 0                 
     for epoch in range(opt.epoch_count, opt.n_epochs + opt.n_epochs_decay + 1):
         epoch_start_time = time.time()
-        iter_data_time = time.time()
-        epoch_iter = 0
         
-        # 用于计算 Epoch 平均 Loss 和 PSNR
         epoch_loss_sum = {name: 0.0 for name in loss_names}
         epoch_psnr_sum = 0.0
-        num_batch = 0
+        num_batches = 0
 
-        # Tqdm 进度条
-        with tqdm(total=len(dataset), desc=f"Epoch {epoch}/{opt.n_epochs + opt.n_epochs_decay}", unit="img") as pbar:
-            for i, data in enumerate(dataset):
-                iter_start_time = time.time()
-                if total_iters % opt.print_freq == 0:
-                    t_data = iter_start_time - iter_data_time
+        # 进度条
+        pbar = tqdm(enumerate(dataset), total=len(dataset), desc=f"Epoch {epoch}", file=sys.stdout)
 
-                total_iters += opt.batch_size
-                epoch_iter += opt.batch_size
-                
-                # 1. 训练核心步
-                model.set_input(data)
-                model.optimize_parameters()
+        for i, data in pbar:
+            iter_start_time = time.time()
+            total_iters += opt.batch_size
+            
+            model.set_input(data)
+            model.optimize_parameters()
+            
+            # Loss 记录
+            errors = model.get_current_losses()
+            for k, v in errors.items():
+                if k in epoch_loss_sum: epoch_loss_sum[k] += v
 
-                # 2. 获取 Loss
-                losses = model.get_current_losses()
-                for name in losses:
-                    epoch_loss_sum[name] += losses[name]
-                
-                # 3. 获取 Visuals (用于计算训练集 PSNR 监控)
-                # [关键修正] 适配 AuganModel 的新命名
-                visuals = model.get_current_visuals()
-                
-                # 安全提取: 使用 .get() 防止键名不存在报错
-                # 映射: input_lq -> input, fake_sq -> fake, real_sq -> real
-                input_tensor = visuals.get('input_lq')
-                fake_tensor  = visuals.get('fake_sq')
-                real_tensor  = visuals.get('real_sq')
-                
-                # 如果找不到新名字，尝试回退到旧名字 (兼容性保护)
-                if input_tensor is None: input_tensor = visuals.get('real_A')
-                if fake_tensor is None:  fake_tensor  = visuals.get('fake_B')
-                if real_tensor is None:  real_tensor  = visuals.get('real_B')
+            # [核心修复] 提取 Tensor 用于计算和显示 (适配新版 AuganModel 变量名)
+            # 优先获取 fake_sq (5D), real_sq (5D), input_lq (5D)
+            fake_tensor = getattr(model, 'fake_sq', None)
+            real_tensor = getattr(model, 'real_sq', None)
+            input_tensor = getattr(model, 'input_lq', None)
+            
+            # 如果找不到 (比如测试模式或者变量名变了)，尝试回退到旧名称 (虽然现在应该都统一了)
+            if fake_tensor is None: fake_tensor = getattr(model, 'fake_B', None)
+            if real_tensor is None: real_tensor = getattr(model, 'real_B', None)
+            if input_tensor is None: input_tensor = getattr(model, 'input_A', None)
+            
+            # 计算 PSNR (Log用)
+            current_psnr = 0.0
+            if fake_tensor is not None and real_tensor is not None:
+                fake_im_raw = tensor2im_custom(fake_tensor)
+                real_im_raw = tensor2im_custom(real_tensor)
+                current_psnr = calculate_psnr(fake_im_raw, real_im_raw)
+                epoch_psnr_sum += current_psnr
 
-                # 计算当前 Batch 的 PSNR
-                current_psnr = 0.0
-                if fake_tensor is not None and real_tensor is not None:
-                    # 简单转 numpy 计算，不绘图
-                    # 注意：这里为了速度，直接取 tensor 数据计算，可能需要简化的 tensor2im
-                    # 为了不拖慢训练，我们只在 print_freq 时计算或者只累加
-                    # 这里我们简单估算：
-                    img_f = tensor2im_custom(fake_tensor)
-                    img_r = tensor2im_custom(real_tensor)
-                    current_psnr = calculate_psnr(img_f, img_r)
-                    epoch_psnr_sum += current_psnr
+            num_batches += 1
 
-                num_batch += 1
+            # 进度条显示
+            pbar.set_postfix({
+                'L1': f"{errors.get('G_L1', errors.get('G_Pixel', 0)):.3f}", # 兼容 G_L1 和 G_Pixel
+                'PSNR': f"{current_psnr:.1f}"
+            })
 
-                # 更新进度条
-                pbar.set_postfix(**losses, psnr=f"{current_psnr:.2f}")
-                pbar.update(opt.batch_size)
-                
-                iter_data_time = time.time()
+            # 定期保存模型
+            if total_iters % opt.save_latest_freq == 0:
+                model.save_networks('latest')
 
-        # End of Epoch
-        # 更新学习率
-        model.update_learning_rate()
+        # === Epoch 结束结算 ===
+        if num_batches > 0:
+            for k in epoch_loss_sum: epoch_loss_sum[k] /= num_batches
+            avg_psnr = epoch_psnr_sum / num_batches
+        else:
+            avg_psnr = 0.0
         
-        # 计算平均统计
-        for name in epoch_loss_sum:
-            epoch_loss_sum[name] /= num_batch
-        avg_psnr = epoch_psnr_sum / num_batch
         time_taken = time.time() - epoch_start_time
-        
-        # 获取当前 LR
+        model.update_learning_rate()
         current_lr = model.optimizers[0].param_groups[0]['lr']
 
-        # 1. 打印日志
-        loss_str = " | ".join([f"{k}: {v:.4f}" for k, v in epoch_loss_sum.items()])
+        # 1. 打印仪表盘 Log
+        gen_losses = []
+        disc_losses = []
+        for k, v in epoch_loss_sum.items():
+            if k.startswith('G_'):
+                gen_losses.append(f"{k.replace('G_', '')}: {v:.4f}")
+            elif k.startswith('D_'):
+                disc_losses.append(f"{k.replace('D_', '')}: {v:.4f}")
+
         log_msg = (
-            f"\n{'-'*60}\n"
-            f"  ✅ [End of Epoch {epoch}] \n"
-            f"  📉 [Loss Avg]      |  {loss_str}\n"
+            f"\n{'='*20} Epoch {epoch} Summary {'='*20}\n"
+            f"  🎨 [Generator Avg] |  {'  |  '.join(gen_losses)}\n"
+            f"  ⚖️  [Discriminator] |  {'  |  '.join(disc_losses)}\n"
             f"  📊 [Metrics Avg]   |  PSNR: {avg_psnr:.2f} dB  |  Time: {time_taken:.1f}s  |  LR: {current_lr:.6f}\n"
             f"{'-'*60}\n"
         )
@@ -171,13 +189,12 @@ if __name__ == '__main__':
         with open(log_name, mode='a', newline='') as f:
             row = [epoch, f"{time_taken:.1f}"]
             for name in loss_names:
-                # 使用 .get 此时更安全
-                row.append(f"{epoch_loss_sum.get(name, 0.0):.4f}")
+                row.append(f"{epoch_loss_sum.get(name, 0.0):.4f}") # 使用 .get 防止 Key 缺失报错
             row.append(f"{avg_psnr:.2f}")
             row.append(f"{current_lr:.6f}")
             csv.writer(f).writerow(row)
 
-        # 3. [核心修改] 生成 Paper Style 对比图 (每个 Epoch 保存一张)
+        # 3. 生成 Paper Style 对比图
         if input_tensor is not None and fake_tensor is not None and real_tensor is not None:
             img_dir = os.path.join(expr_dir, 'web_images')
             if not os.path.exists(img_dir): os.makedirs(img_dir)
@@ -187,40 +204,16 @@ if __name__ == '__main__':
             img_fake = tensor2im_custom(fake_tensor)
             img_sq = tensor2im_custom(real_tensor)
             
-            # 计算这张展示图片的具体 PSNR (所见即所得)
+            # 计算这张展示图片的具体 PSNR
             slice_psnr = calculate_psnr(img_fake, img_sq)
             
-            # 使用 Matplotlib 绘图
-            fig, axes = plt.subplots(1, 3, figsize=(12, 4))
-            
-            # (A) Input
-            axes[0].imshow(img_lq.astype(np.uint8))
-            axes[0].set_title("Input (Low Quality)")
-            axes[0].axis('off')
-            
-            # (B) AUGAN Output
-            axes[1].imshow(img_fake.astype(np.uint8))
-            axes[1].set_title(f"AUGAN (PSNR: {slice_psnr:.2f} dB)")
-            axes[1].axis('off')
-            
-            # (C) Ground Truth
-            axes[2].imshow(img_sq.astype(np.uint8))
-            axes[2].set_title("Ground Truth")
-            axes[2].axis('off')
-            
-            plt.tight_layout()
-            save_path = os.path.join(img_dir, f'epoch_{epoch}_train_preview.png')
-            plt.savefig(save_path, dpi=150)
-            plt.close()
-            print(f"  📸 Saved preview to: {save_path}")
+            # 绘制大图
+            save_path = os.path.join(img_dir, f'epoch_{epoch:03d}_comparison.png')
+            save_paper_style_fig(save_path, epoch, opt.name, slice_psnr, img_lq, img_fake, img_sq)
 
-        # 保存模型 (每5个epoch或自定义)
+        # 4. 保存模型
         if epoch % opt.save_epoch_freq == 0:
-            print('saving the model at the end of epoch %d, iters %d' % (epoch, total_iters))
             model.save_networks('latest')
             model.save_networks(epoch)
-        
-        # 强制保存 latest
-        model.save_networks('latest')
 
-    print(">>> Training Finished!")
+    print("🏁 所有训练完成!")
