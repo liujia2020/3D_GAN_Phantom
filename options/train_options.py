@@ -30,5 +30,9 @@ class TrainOptions(BaseOptions):
 
         # parser.add_argument('--use_attention', action='store_true', help='if specified, use Attention Mechanism (PA + LAA) in Generator')
 
+        # ======== 深度加权 Loss (Depth-Weighting) ========
+        parser.add_argument('--depth_weight_mode', type=str, default='none', choices=['none', 'linear', 'exp'], help='深层加权模式 (none | linear | exp)')
+        parser.add_argument('--depth_weight_max', type=float, default=5.0, help='深层加权的最大倍数 (默认5倍)')
+        
         self.isTrain = True
         return parser

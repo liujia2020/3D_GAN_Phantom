@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import math
 from .losses import TVLoss, FrequencyLoss, VGG19FeatureExtractor
 from utils.ssim_loss import SSIMLoss
 from . import networks
@@ -45,8 +46,44 @@ class LossHelper(nn.Module):
         loss_dict['G_GAN'] = loss_G_GAN
         total_loss += loss_G_GAN
         
-        # 2. Pixel Loss (L1)
-        loss_G_L1 = self.criterionL1(fake_sq, real_sq) * self.opt.lambda_pixel
+        # # 2. Pixel Loss (L1)
+        # loss_G_L1 = self.criterionL1(fake_sq, real_sq) * self.opt.lambda_pixel
+        # loss_dict['G_L1'] = loss_G_L1
+        # total_loss += loss_G_L1
+        
+        # 2. Pixel Loss (L1) [引入深度加权机制]
+        depth_mode = getattr(self.opt, 'depth_weight_mode', 'none')
+        
+        if depth_mode == 'none':
+            # 如果没开开关，使用原版普通 L1，保证旧实验的绝对兼容
+            loss_G_L1 = self.criterionL1(fake_sq, real_sq) * self.opt.lambda_pixel
+        else:
+            # 开启深度加权
+            max_w = getattr(self.opt, 'depth_weight_max', 5.0)
+            
+            # 1. 计算绝对误差图
+            abs_err = torch.abs(fake_sq - real_sq)
+            
+            # 2. 获取深度 D (假设 tensor shape 为 B, C, D, H, W)
+            D = fake_sq.shape[2]
+            d_idx = torch.arange(D, device=self.device, dtype=torch.float32)
+            
+            # 3. 生成 1D 权重曲线
+            if depth_mode == 'linear':
+                weights = 1.0 + (max_w - 1.0) * (d_idx / (D - 1))
+            elif depth_mode == 'exp':
+                k = math.log(max_w) / (D - 1)
+                weights = torch.exp(k * d_idx)
+            else:
+                weights = torch.ones(D, device=self.device)
+                
+            # 4. 广播机制 (Broadcasting)：将 1D 变形为 (1, 1, D, 1, 1) 然后相乘
+            weights = weights.view(1, 1, D, 1, 1)
+            weighted_err = abs_err * weights
+            
+            # 5. 求全局平均，并乘上基础权重
+            loss_G_L1 = torch.mean(weighted_err) * self.opt.lambda_pixel
+            
         loss_dict['G_L1'] = loss_G_L1
         total_loss += loss_G_L1
         
