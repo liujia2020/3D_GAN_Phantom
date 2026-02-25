@@ -62,7 +62,7 @@ class AuganModel(BaseModel):
         # 2. Define D (仅训练)
         if self.isTrain:
             self.netD = networks.define_D(opt.input_nc + opt.output_nc, opt.ndf, opt.netD,
-                                          opt.n_layers_D, opt.norm, use_sigmoid, opt.init_type, opt.init_gain, self.gpu_ids)
+                                          opt.n_layers_D, opt.norm, use_sigmoid, opt.init_type, opt.init_gain, self.gpu_ids, use_sn=getattr(opt, 'use_sn', False))
 
         # 3. 初始化 LossHelper (仅训练)
         if self.isTrain:
