@@ -45,17 +45,25 @@ def save_image(image_numpy, image_path):
 # ==============================================================================
 # 滑窗推理工具
 # ==============================================================================
-def get_gaussian_weight(patch_size, sigma_scale=0.125):
+def get_hann_weight(patch_size):
+    """
+    生成 3D 汉宁窗 (Hann Window)。
+    在 50% 重叠步长下，相邻的汉宁窗相加完美等于 1.0，可彻底消除拼接缝隙。
+    """
     d, h, w = patch_size
-    z = np.linspace(-1, 1, d)
-    y = np.linspace(-1, 1, h)
-    x = np.linspace(-1, 1, w)
-    zz, yy, xx = np.meshgrid(z, y, x, indexing='ij')
-    dist = zz**2 + yy**2 + xx**2
-    sigma = sigma_scale 
-    kernel = np.exp(-dist / (2 * sigma**2))
-    kernel = kernel / np.max(kernel)
-    return kernel.astype(np.float32)
+    
+    # 使用 numpy 生成三个方向的 1D 汉宁窗
+    window_d = np.hanning(d)
+    window_h = np.hanning(h)
+    window_w = np.hanning(w)
+    
+    # 利用 numpy 的广播机制，将 1D 窗扩展成 3D 权重矩阵
+    weight_3d = window_d[:, None, None] * window_h[None, :, None] * window_w[None, None, :]
+    
+    # 加上一个极小值 1e-5，防止边缘刚好全是 0 导致后续除零报错
+    weight_3d = np.clip(weight_3d, 1e-5, 1.0)
+    
+    return weight_3d.astype(np.float32)
 
 def predict_sliding_window(model, input_vol, patch_size=(128, 64, 64), stride=(64, 32, 32)):
     # 1. 预处理 [-60, 0] -> [-1, 1]
@@ -76,7 +84,7 @@ def predict_sliding_window(model, input_vol, patch_size=(128, 64, 64), stride=(6
     # 3. 初始化
     output_vol = np.zeros_like(img_pad)
     weight_map = np.zeros_like(img_pad)
-    patch_weight = get_gaussian_weight(patch_size)
+    patch_weight = get_hann_weight(patch_size)
     
     model.eval()
     
