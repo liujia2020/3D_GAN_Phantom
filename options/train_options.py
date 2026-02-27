@@ -1,0 +1,40 @@
+from .base_options import BaseOptions
+
+class TrainOptions(BaseOptions):
+    """This class includes training options."""
+
+    def initialize(self, parser):
+        parser = BaseOptions.initialize(self, parser)
+        
+        # [注意] Loss 权重参数 (lambda_gan, lambda_pixel 等) 已移至 models/augan_model.py 定义
+        # 此处不再重复定义，以避免 conflicting option string 报错
+
+        parser.add_argument('--display_freq', type=int, default=400, help='frequency of showing training results on screen')
+        parser.add_argument('--print_freq', type=int, default=100, help='frequency of showing training results on console')
+        parser.add_argument('--save_latest_freq', type=int, default=5000, help='frequency of saving the latest results')
+        parser.add_argument('--save_epoch_freq', type=int, default=5, help='frequency of saving checkpoints at the end of epochs')
+        parser.add_argument('--save_by_iter', action='store_true', help='whether saves model by iteration')
+        parser.add_argument('--continue_train', action='store_true', help='continue training: load the latest model')
+        parser.add_argument('--epoch_count', type=int, default=1, help='the starting epoch count')
+        parser.add_argument('--phase', type=str, default='train', help='train, val, test, etc')
+        parser.add_argument('--lr_d_ratio', type=float, default=1.0, help='learning rate ratio for D relative to G')
+        
+        parser.add_argument('--n_epochs', type=int, default=100, help='number of epochs with the initial learning rate')
+        parser.add_argument('--n_epochs_decay', type=int, default=100, help='number of epochs to linearly decay learning rate to zero')
+        parser.add_argument('--beta1', type=float, default=0.5, help='momentum term of adam')
+        parser.add_argument('--lr', type=float, default=0.0002, help='initial learning rate for adam')
+        parser.add_argument('--gan_mode', type=str, default='lsgan', help='the type of GAN objective. [vanilla| lsgan | wgangp]')
+        parser.add_argument('--pool_size', type=int, default=50, help='the size of image buffer that stores previously generated images')
+        parser.add_argument('--lr_policy', type=str, default='linear', help='learning rate policy. [linear | step | plateau | cosine]')
+        parser.add_argument('--lr_decay_iters', type=int, default=50, help='multiply by a gamma every lr_decay_iters iterations')
+
+        # parser.add_argument('--use_attention', action='store_true', help='if specified, use Attention Mechanism (PA + LAA) in Generator')
+
+        # ======== 深度加权 Loss & 谱归一化 SN ========
+        parser.add_argument('--depth_weight_mode', type=str, default='none', choices=['none', 'linear', 'exp'], help='深层加权模式 (none | linear | exp)')
+        parser.add_argument('--depth_weight_max', type=float, default=5.0, help='深层加权的最大倍数 (默认5倍)')
+        parser.add_argument('--use_sn', action='store_true', help='是否在判别器中使用谱归一化 (Spectral Normalization)')
+        
+        parser.add_argument('--use_dropout', action='store_true', help='是否在生成器中使用 Dropout (用于注入随机噪声)')
+        self.isTrain = True
+        return parser
