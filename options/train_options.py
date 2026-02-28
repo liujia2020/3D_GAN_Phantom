@@ -30,11 +30,6 @@ class TrainOptions(BaseOptions):
 
         # parser.add_argument('--use_attention', action='store_true', help='if specified, use Attention Mechanism (PA + LAA) in Generator')
 
-        # ======== 深度加权 Loss & 谱归一化 SN ========
-        parser.add_argument('--depth_weight_mode', type=str, default='none', choices=['none', 'linear', 'exp'], help='深层加权模式 (none | linear | exp)')
-        parser.add_argument('--depth_weight_max', type=float, default=5.0, help='深层加权的最大倍数 (默认5倍)')
-        parser.add_argument('--use_sn', action='store_true', help='是否在判别器中使用谱归一化 (Spectral Normalization)')
-        
-        parser.add_argument('--use_dropout', action='store_true', help='是否在生成器中使用 Dropout (用于注入随机噪声)')
+
         self.isTrain = True
         return parser

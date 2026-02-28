@@ -70,7 +70,12 @@ class BaseOptions():
         parser.add_argument('--no_elastic', action='store_true', help='disable elastic transform')
         parser.add_argument('--no_flip', action='store_true', help='disable flip')
         parser.add_argument('--upsample_mode', type=str, default='trilinear', help='upsampling mode in generator: trilinear | nearest')
-
+        # ======== 深度加权 Loss & 谱归一化 SN ========
+        parser.add_argument('--depth_weight_mode', type=str, default='none', choices=['none', 'linear', 'exp'], help='深层加权模式 (none | linear | exp)')
+        parser.add_argument('--depth_weight_max', type=float, default=5.0, help='深层加权的最大倍数 (默认5倍)')
+        parser.add_argument('--use_sn', action='store_true', help='是否在判别器中使用谱归一化 (Spectral Normalization)')
+        
+        parser.add_argument('--use_dropout', action='store_true', help='是否在生成器中使用 Dropout (用于注入随机噪声)')
         self.initialized = True
         return parser
 
