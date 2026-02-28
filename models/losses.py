@@ -38,7 +38,7 @@ class TVLoss(nn.Module):
         return t.size()[1] * t.size()[2] * t.size()[3]
 
 # =========================================================================
-# [模块 3] Frequency Loss (FFL)
+# [模块 3] Frequency Loss (FFL) (已修复为 2.5D 平面输入)
 # =========================================================================
 class FrequencyLoss(nn.Module):
     def __init__(self):
@@ -46,11 +46,12 @@ class FrequencyLoss(nn.Module):
         self.criterion = nn.L1Loss()
 
     def forward(self, pred, target):
-        b, c, d, h, w = pred.shape
-        pred_2d = pred.view(b * d, c, h, w)
-        target_2d = target.view(b * d, c, h, w)
-        pred_fft = torch.fft.rfft2(pred_2d, norm='ortho')
-        target_fft = torch.fft.rfft2(target_2d, norm='ortho')
+        # 降维修复：此时的 pred 和 target 已经是纯净的 4 维张量 (Batch, Channel, Height, Width)
+        # 所以完全不需要解包 d(深度)，直接扔进 rfft2 即可，它会自动对最后两个维度 (H, W) 做 2D FFT
+        pred_fft = torch.fft.rfft2(pred, norm='ortho')
+        target_fft = torch.fft.rfft2(target, norm='ortho')
+        
         pred_amp = torch.abs(pred_fft)
         target_amp = torch.abs(target_fft)
+        
         return self.criterion(torch.log(pred_amp + 1.0), torch.log(target_amp + 1.0))

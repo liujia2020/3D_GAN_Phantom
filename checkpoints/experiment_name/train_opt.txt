@@ -1,0 +1,75 @@
+----------------- Options ---------------
+                attn_temp: 1.0                           
+               batch_size: 1                             
+                    beta1: 0.5                           
+          checkpoints_dir: ./checkpoints                 
+           continue_train: False                         
+                 cropSize: 256                           
+                 dataroot: /home/liujia/g_linux/Phantom_Isotropic/	[default: None]
+             dataset_mode: ultrasound                    
+         depth_weight_max: 5.0                           
+        depth_weight_mode: none                          
+                   dir_lq: Recon_LQ_03                   
+                   dir_sq: Recon_SQ_75                   
+                direction: AtoB                          
+              display_dir: ./checkpoints                 
+             display_freq: 400                           
+                    epoch: latest                        
+              epoch_count: 1                             
+                 gan_mode: lsgan                         
+                  gpu_ids: 0                             
+                init_gain: 0.02                          
+                init_type: normal                        
+                 input_nc: 1                             
+                  isTrain: True                          	[default: None]
+                lambda_bg: 0.0                           
+               lambda_ffl: 0.0                           
+               lambda_gan: 1.0                           
+        lambda_perceptual: 0.0                           
+             lambda_pixel: 100.0                         
+              lambda_ssim: 0.0                           
+                lambda_tv: 0.0                           
+                 loadSize: 286                           
+                load_iter: 0                             	[default: 0]
+                       lr: 0.0002                        
+               lr_d_ratio: 1.0                           
+           lr_decay_iters: 50                            
+                lr_policy: linear                        
+                    model: cycle_gan                     
+                 n_epochs: 100                           
+           n_epochs_decay: 100                           
+               n_layers_D: 3                             
+                     name: experiment_name               
+                      ndf: 64                            
+                     netD: basic                         
+                     netG: res_unet_3d                   
+                      ngf: 64                            
+               no_dropout: False                         
+               no_elastic: False                         
+                  no_flip: False                         
+                     norm: batch                         
+                 norm_max: 0.0                           
+                 norm_min: -60.0                         
+              num_threads: 4                             
+                output_nc: 1                             
+             patch_size_d: 64                            
+             patch_size_h: 64                            	[default: 128]
+             patch_size_w: 64                            	[default: 128]
+                    phase: train                         
+                pool_size: 50                            
+               print_freq: 100                           
+             save_by_iter: False                         
+          save_epoch_freq: 5                             
+         save_latest_freq: 5000                          
+           serial_batches: False                         
+                spacing_x: 1.0                           
+                spacing_z: 1.0                           
+                   suffix:                               
+            upsample_mode: trilinear                     
+                 use_aspp: False                         
+            use_attention: False                         
+             use_dilation: False                         
+              use_dropout: False                         
+                   use_sn: False                         
+                  verbose: False                         
+----------------- End -------------------

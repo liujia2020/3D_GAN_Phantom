@@ -1,23 +1,23 @@
 import torch
 import torch.nn as nn
 import functools
-from torch.nn.utils import spectral_norm  # [必须导入]
+from torch.nn.utils import spectral_norm
 
-class NLayerDiscriminator3D(nn.Module):
-    def __init__(self, input_nc, ndf=64, n_layers=3, norm_layer=nn.InstanceNorm3d, use_sn=False): 
-        super(NLayerDiscriminator3D, self).__init__()
+class NLayerDiscriminator2D(nn.Module):
+    def __init__(self, input_nc, ndf=64, n_layers=3, norm_layer=nn.InstanceNorm2d, use_sn=False): 
+        super(NLayerDiscriminator2D, self).__init__()
         
         if type(norm_layer) == functools.partial:
-            use_bias = norm_layer.func == nn.InstanceNorm3d
+            use_bias = norm_layer.func == nn.InstanceNorm2d
         else:
-            use_bias = norm_layer == nn.InstanceNorm3d
+            use_bias = norm_layer == nn.InstanceNorm2d
 
         kw = 4
         padw = 1
         
-        # 动态卷积层生成器 (核心修改)
+        # 降维：改为 Conv2d
         def get_conv(*args, **kwargs):
-            conv = nn.Conv3d(*args, **kwargs)
+            conv = nn.Conv2d(*args, **kwargs)
             return spectral_norm(conv) if use_sn else conv
 
         sequence = []

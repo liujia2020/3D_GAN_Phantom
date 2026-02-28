@@ -4,17 +4,10 @@ from torch.nn import init
 import functools
 from torch.optim import lr_scheduler
 
-# 1. 导入 Generator (只保留 ResUnetGenerator)
 from .generator import ResUnetGenerator
+from .discriminator import NLayerDiscriminator2D
 
-# 2. 导入 Discriminator
-from .discriminator import NLayerDiscriminator3D
-
-# ==============================================================================
-# [核心修复] get_scheduler
-# ==============================================================================
 def get_scheduler(optimizer, opt):
-    """Return a learning rate scheduler"""
     if opt.lr_policy == 'linear':
         def lambda_rule(epoch):
             lr_l = 1.0 - max(0, epoch + opt.epoch_count - opt.n_epochs) / float(opt.n_epochs_decay + 1)
@@ -30,24 +23,21 @@ def get_scheduler(optimizer, opt):
         return NotImplementedError('learning rate policy [%s] is not implemented', opt.lr_policy)
     return scheduler
 
-# ==============================================================================
-# [补丁] PixelDiscriminator3D
-# ==============================================================================
-class PixelDiscriminator3D(nn.Module):
-    def __init__(self, input_nc, ndf=64, norm_layer=nn.BatchNorm3d, use_sigmoid=False):
-        super(PixelDiscriminator3D, self).__init__()
+class PixelDiscriminator2D(nn.Module):
+    def __init__(self, input_nc, ndf=64, norm_layer=nn.BatchNorm2d, use_sigmoid=False):
+        super(PixelDiscriminator2D, self).__init__()
         if type(norm_layer) == functools.partial:
-            use_bias = norm_layer.func == nn.InstanceNorm3d
+            use_bias = norm_layer.func == nn.InstanceNorm2d
         else:
-            use_bias = norm_layer == nn.InstanceNorm3d
+            use_bias = norm_layer == nn.InstanceNorm2d
 
         self.net = [
-            nn.Conv3d(input_nc, ndf, kernel_size=1, stride=1, padding=0),
+            nn.Conv2d(input_nc, ndf, kernel_size=1, stride=1, padding=0),
             nn.LeakyReLU(0.2, True),
-            nn.Conv3d(ndf, ndf * 2, kernel_size=1, stride=1, padding=0, bias=use_bias),
+            nn.Conv2d(ndf, ndf * 2, kernel_size=1, stride=1, padding=0, bias=use_bias),
             norm_layer(ndf * 2),
             nn.LeakyReLU(0.2, True),
-            nn.Conv3d(ndf * 2, 1, kernel_size=1, stride=1, padding=0, bias=use_bias)
+            nn.Conv2d(ndf * 2, 1, kernel_size=1, stride=1, padding=0, bias=use_bias)
         ]
         if use_sigmoid:
             self.net.append(nn.Sigmoid())
@@ -56,47 +46,35 @@ class PixelDiscriminator3D(nn.Module):
     def forward(self, input):
         return self.net(input)
 
-# ==============================================================================
-# define_G (已清理)
-# ==============================================================================
-def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[], use_attention=False, attn_temp=1.0, use_dilation=False, use_aspp=False, upsample_mode='trilinear'):
-    """
-    [Exp 30 修改]: 增加了 attn_temp 和 use_dilation 参数
-    """
+def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[], use_attention=False, attn_temp=1.0, use_dilation=False, use_aspp=False, upsample_mode='bilinear'):
     net = None
     norm_layer = get_norm_layer(norm_type=norm)
 
-    if netG == 'res_unet_3d':
-        net = ResUnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, use_attention=use_attention, attn_temp=attn_temp, use_dilation=use_dilation, use_aspp=use_aspp, upsample_mode='trilinear')
+    if netG == 'res_unet_3d':  # 名字我们保持不变，免得改命令，但内核已经是 2D 的了
+        net = ResUnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, use_attention=use_attention, attn_temp=attn_temp, use_dilation=use_dilation, use_aspp=use_aspp, upsample_mode=upsample_mode)
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
         
     return init_net(net, init_type, init_gain, gpu_ids)
 
-# ==============================================================================
-# define_D
-# ==============================================================================
 def define_D(input_nc, ndf, netD, n_layers_D=3, norm='batch', use_sigmoid=False, init_type='normal', init_gain=0.02, gpu_ids=[], use_sn=False):
     net = None
     norm_layer = get_norm_layer(norm_type=norm)
 
     if netD == 'pixel':
-        net = NLayerDiscriminator3D(input_nc, ndf, n_layers=3, norm_layer=norm_layer, use_sn=use_sn) 
+        net = NLayerDiscriminator2D(input_nc, ndf, n_layers=3, norm_layer=norm_layer, use_sn=use_sn) 
     elif netD == 'n_layers':
-        net = NLayerDiscriminator3D(input_nc, ndf, n_layers=n_layers_D, norm_layer=norm_layer, use_sn=use_sn)
+        net = NLayerDiscriminator2D(input_nc, ndf, n_layers=n_layers_D, norm_layer=norm_layer, use_sn=use_sn)
     else:
-        net = NLayerDiscriminator3D(input_nc, ndf, n_layers=3, norm_layer=norm_layer, use_sn=use_sn)
+        net = NLayerDiscriminator2D(input_nc, ndf, n_layers=3, norm_layer=norm_layer, use_sn=use_sn)
 
     return init_net(net, init_type, init_gain, gpu_ids)
 
-# ==============================================================================
-# 辅助函数 (含警告修复)
-# ==============================================================================
 def get_norm_layer(norm_type='instance'):
     if norm_type == 'batch':
-        norm_layer = functools.partial(nn.BatchNorm3d, affine=True, track_running_stats=True)
+        norm_layer = functools.partial(nn.BatchNorm2d, affine=True, track_running_stats=True)
     elif norm_type == 'instance':
-        norm_layer = functools.partial(nn.InstanceNorm3d, affine=False, track_running_stats=False)
+        norm_layer = functools.partial(nn.InstanceNorm2d, affine=False, track_running_stats=False)
     elif norm_type == 'group':
         norm_layer = functools.partial(nn.GroupNorm, 32)
     elif norm_type == 'none':
@@ -105,12 +83,10 @@ def get_norm_layer(norm_type='instance'):
         raise NotImplementedError('normalization layer [%s] is not found' % norm_type)
     return norm_layer
 
-
 def init_weights(net, init_type='normal', init_gain=0.02):
     def init_func(m):
         classname = m.__class__.__name__
         if hasattr(m, 'weight') and (classname.find('Conv') != -1 or classname.find('Linear') != -1):
-            # [修复] 增加 .numel() > 0 判断，防止对空 Tensor 初始化引发警告
             if m.weight.numel() > 0:
                 if init_type == 'normal':
                     init.normal_(m.weight.data, 0.0, init_gain)
@@ -122,12 +98,10 @@ def init_weights(net, init_type='normal', init_gain=0.02):
                     init.orthogonal_(m.weight.data, gain=init_gain)
                 else:
                     raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
-            
-            # [修复] 同理，检查 bias
             if hasattr(m, 'bias') and m.bias is not None and m.bias.numel() > 0:
                 init.constant_(m.bias.data, 0.0)
                 
-        elif classname.find('BatchNorm3d') != -1:
+        elif classname.find('BatchNorm2d') != -1:
             if m.weight.numel() > 0:
                 init.normal_(m.weight.data, 1.0, init_gain)
             if m.bias is not None and m.bias.numel() > 0:
