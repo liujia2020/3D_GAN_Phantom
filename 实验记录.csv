@@ -1,0 +1,6 @@
+ID,实验名称 (--name),架构,输入,Batch,Upsample,ASPP,Attn,SN,Dropout,GAN,L1,SSIM,FFL,实验目的 (Purpose),评价: 凝实度,评价: 伪影/背景,综合结论
+31,N_31_25D_Slice_Final_Nearest_GAN1_FFL0.01_Epoch200,2.5D ResU,3->1,12,Nearest,➖,➖,✅,✅,1,10,➖,0.01,2.5D基准 (Nearest)：测试切片输入(3->1)与基础 2.5D 框架下 Nearest 上采样的效果,➖,➖,➖
+32,N_32_25D_Bilinear_L100_NoFFL,2.5D ResU,3->1,8,Bilinear,➖,➖,✅,✅,1,100,10.0,0,Bilinear测试：改用 Bilinear 上采样，提高 L1 (100)，关闭 FFL，引入 SSIM (w=10) 观察平滑度,➖,➖,➖
+33,N_33_25D_VGG_Like_GAN2_FFL0.1,2.5D ResU,3->1,14,Bilinear,➖,➖,✅,✅,2,10,10.0,0.1,对抗增强：降低 L1 (10)，提升 GAN (2)，重开 FFL (0.1)，追求更激进的高频纹理生成,➖,➖,➖
+34,N_34_25D_ASPP_Attention_L20,2.5D ResU,3->1,14,Bilinear,✅,✅,✅,✅,1,20,10.0,0.01,结构增强：引入 ASPP 与 Attention 模块扩大感受野，L1 提至 20 维持稳定,➖,➖,➖
+35,N_35_25D_Batch16_Balance,2.5D ResU,3->1,14,Bilinear,➖,➖,✅,✅,1,10,10.0,0.01,参数平衡：去除 ASPP/Attn 模块回归轻量，调整各项权重至均衡状态 (注：参数实为 Batch 14),➖,➖,➖

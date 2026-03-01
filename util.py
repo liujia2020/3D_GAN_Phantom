@@ -1,5 +1,5 @@
 """
-util.py - 最终修正版 (纯净 Save)
+util.py - 最终修正版 (2.5D 切片推理引擎)
 """
 import os
 import numpy as np
@@ -43,78 +43,58 @@ def save_image(image_numpy, image_path):
     image_pil.save(image_path)
 
 # ==============================================================================
-# 滑窗推理工具
+# [核心重构] 2.5D 切片推理工具 (替代笨重的 3D 滑窗)
 # ==============================================================================
-def get_hann_weight(patch_size):
+def predict_slice_by_slice(model, input_vol, opt):
     """
-    生成 3D 汉宁窗 (Hann Window)。
-    在 50% 重叠步长下，相邻的汉宁窗相加完美等于 1.0，可彻底消除拼接缝隙。
+    逐层扫描推断：将 1024 层的 3D 矩阵，切成 1024 次 2.5D 夹心饼干喂给网络。
+    不使用任何滑窗和重叠，速度极快，且彻底避免 3D 拉扯伪影。
     """
-    d, h, w = patch_size
-    
-    # 使用 numpy 生成三个方向的 1D 汉宁窗
-    window_d = np.hanning(d)
-    window_h = np.hanning(h)
-    window_w = np.hanning(w)
-    
-    # 利用 numpy 的广播机制，将 1D 窗扩展成 3D 权重矩阵
-    weight_3d = window_d[:, None, None] * window_h[None, :, None] * window_w[None, None, :]
-    
-    # 加上一个极小值 1e-5，防止边缘刚好全是 0 导致后续除零报错
-    weight_3d = np.clip(weight_3d, 1e-5, 1.0)
-    
-    return weight_3d.astype(np.float32)
-
-def predict_sliding_window(model, input_vol, patch_size=(128, 64, 64), stride=(64, 32, 32)):
     # 1. 预处理 [-60, 0] -> [-1, 1]
-    norm_min, norm_max = -60.0, 0.0
+    norm_min = getattr(opt, 'norm_min', -60.0)
+    norm_max = getattr(opt, 'norm_max', 0.0)
     input_vol = np.clip(input_vol, norm_min, norm_max)
     img_norm = (input_vol - norm_min) / (norm_max - norm_min) * 2.0 - 1.0
     
     D, H, W = img_norm.shape
-    pd, ph, pw = patch_size
-    sd, sh, sw = stride
     
-    # 2. Padding
-    pad_d = (pd - D % pd) % pd
-    pad_h = (ph - H % ph) % ph
-    pad_w = (pw - W % pw) % pw
-    img_pad = np.pad(img_norm, ((0, pad_d+pd), (0, pad_h+ph), (0, pad_w+pw)), mode='reflect')
-    
-    # 3. 初始化
-    output_vol = np.zeros_like(img_pad)
-    weight_map = np.zeros_like(img_pad)
-    patch_weight = get_hann_weight(patch_size)
+    # 初始化一个全空的 3D 矩阵，准备接收网络吐出的高清 2D 切片
+    output_vol = np.zeros_like(img_norm)
     
     model.eval()
-    
-    # 4. 滑窗
-    z_steps = list(range(0, img_pad.shape[0] - pd + 1, sd))
-    y_steps = list(range(0, img_pad.shape[1] - ph + 1, sh))
-    x_steps = list(range(0, img_pad.shape[2] - pw + 1, sw))
-    
     with torch.no_grad():
-        for z in z_steps:
-            for y in y_steps:
-                for x in x_steps:
-                    patch = img_pad[z:z+pd, y:y+ph, x:x+pw]
-                    patch_tensor = torch.from_numpy(patch).unsqueeze(0).unsqueeze(0).float().cuda()
-                    fake_patch = model.netG(patch_tensor)
-                    fake_patch = fake_patch.squeeze().cpu().numpy()
-                    
-                    output_vol[z:z+pd, y:y+ph, x:x+pw] += fake_patch * patch_weight
-                    weight_map[z:z+pd, y:y+ph, x:x+pw] += patch_weight
-                    
-    # 5. 归一化 & 裁剪
-    weight_map[weight_map == 0] = 1.0
-    output_vol /= weight_map
+        for z in range(D):
+            # 边界保护
+            z_prev = max(0, z - 1)
+            z_next = min(D - 1, z + 1)
+            
+            # 抽取 2.5D 夹心饼干
+            slice_prev = img_norm[z_prev, :, :]
+            slice_curr = img_norm[z, :, :]
+            slice_next = img_norm[z_next, :, :]
+            
+            # 叠成 (3, H, W)
+            patch_25d = np.stack([slice_prev, slice_curr, slice_next], axis=0)
+            
+            # 升维变 Tensor: (1, 3, H, W)
+            patch_tensor = torch.from_numpy(patch_25d).unsqueeze(0).float().to(model.device)
+            
+            # 网络推理，吐出 (1, 1, H, W) 的单层高清图
+            fake_slice = model.netG(patch_tensor)
+            
+            # 降维变 Numpy: (H, W)
+            fake_slice_np = fake_slice.squeeze().cpu().numpy()
+            
+            # 像发扑克牌一样，精确地放回空 3D 矩阵的当前层
+            output_vol[z, :, :] = fake_slice_np
+            
+    # 2. 反归一化 [-1, 1] -> [-60, 0]
     output_vol = (output_vol + 1.0) / 2.0 * (norm_max - norm_min) + norm_min
-    final_vol = output_vol[:D, :H, :W]
     
-    return final_vol
+    return output_vol
 
 # ==============================================================================
-# [修正] 纯净版 save_nii (禁止任何隐式转置)
+# 纯净版 save_nii (禁止任何隐式转置)
 # ==============================================================================
 def save_nii(data, save_path, affine):
     """
@@ -125,8 +105,6 @@ def save_nii(data, save_path, affine):
     if isinstance(data, torch.Tensor):
         data = data.cpu().float().numpy()
         
-    # 这里的逻辑：此时的 data 应该已经被 test.py 还原回了和 affine 匹配的形状
-    # 所以直接保存，不做任何多余的 transpose
-    
+    # 直接保存，不做任何多余的 transpose
     img = nib.Nifti1Image(data, affine)
     nib.save(img, save_path)

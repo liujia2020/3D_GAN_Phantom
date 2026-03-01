@@ -1,7 +1,7 @@
 import torch
 from .base_model import BaseModel
 from . import networks
-from .losses import FocalFrequencyLoss
+from .losses import FrequencyLoss
 from utils.ssim_loss import SSIMLoss
 
 class AuganModel(BaseModel):
@@ -34,13 +34,16 @@ class AuganModel(BaseModel):
 
         if self.isTrain:
             # 判别器的输入通道 = LQ的3通道 + HQ的1通道 = 4通道
+            # 修复 no_lsgan 报错：直接写死 use_sigmoid=False
             self.netD = networks.define_D(opt.input_nc + opt.output_nc, opt.ndf, opt.netD,
-                                          opt.n_layers_D, opt.norm, opt.no_lsgan, opt.init_type, opt.init_gain, self.gpu_ids, use_sn=opt.use_sn)
+                                          opt.n_layers_D, opt.norm, False, opt.init_type, opt.init_gain, self.gpu_ids, use_sn=opt.use_sn)
 
-            self.criterionGAN = networks.GANLoss(use_lsgan=not opt.no_lsgan).to(self.device)
+            # 修复 no_lsgan 报错：直接写死 use_lsgan=True
+            self.criterionGAN = networks.GANLoss(use_lsgan=True).to(self.device)
             self.criterionL1 = torch.nn.L1Loss()
             self.criterionSSIM = SSIMLoss(window_size=11, val_range=2.0).to(self.device)
-            self.criterionFFL = FocalFrequencyLoss(loss_weight=1.0, alpha=1.0).to(self.device)
+            # 修复 FrequencyLoss 名称不匹配
+            self.criterionFFL = FrequencyLoss().to(self.device)
             
             self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))

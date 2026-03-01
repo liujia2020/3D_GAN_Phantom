@@ -92,16 +92,7 @@ if __name__ == '__main__':
     has_monitor = os.path.exists(monitor_lq_path) and os.path.exists(monitor_hq_path)
     mon_lq_tensor, mon_hq_tensor = None, None
     
-    # if has_monitor:
-    #     print("🔍 发现固定监控样本，正在加载...")
-    #     # 读取 NIfTI 数据并转为 float32
-    #     mon_lq_np = nib.load(monitor_lq_path).get_fdata().astype(np.float32)
-    #     mon_hq_np = nib.load(monitor_hq_path).get_fdata().astype(np.float32)
-        
-    #     # 将数据变形为网络需要的格式: (Batch, Channel, D, H, W) = (1, 1, 128, 64, 64)
-    #     mon_lq_tensor = torch.from_numpy(mon_lq_np).unsqueeze(0).unsqueeze(0).to(model.device)
-    #     mon_hq_tensor = torch.from_numpy(mon_hq_np).unsqueeze(0).unsqueeze(0).to(model.device)
-    #     print("✅ 固定监控样本加载完毕！将在每个 Epoch 结束时进行定点拍摄。")
+
     if has_monitor:
         print("🔍 发现固定监控样本，正在加载...")
         # 读取 NIfTI 数据并转为 float32
@@ -109,31 +100,44 @@ if __name__ == '__main__':
         mon_hq_np = nib.load(monitor_hq_path).get_fdata().astype(np.float32)
         
         # ==========================================================
-        # [核心修复]：加入归一化逻辑，映射到 [-1, 1]
+        # [归一化逻辑]：映射到 [-1, 1]
         # ==========================================================
-        norm_min = getattr(opt, 'norm_min', -60.0) # 取不到默认用 -60
-        norm_max = getattr(opt, 'norm_max', 0.0)   # 取不到默认用 0
+        norm_min = getattr(opt, 'norm_min', -60.0)
+        norm_max = getattr(opt, 'norm_max', 0.0)
         
-        # 1. 缩放到 [0, 1]
         mon_lq_np = (mon_lq_np - norm_min) / (norm_max - norm_min)
         mon_hq_np = (mon_hq_np - norm_min) / (norm_max - norm_min)
-        
-        # 2. 映射到 [-1, 1]
         mon_lq_np = mon_lq_np * 2.0 - 1.0
         mon_hq_np = mon_hq_np * 2.0 - 1.0
-        
-        # 3. 截断异常值，确保绝对安全
         mon_lq_np = np.clip(mon_lq_np, -1.0, 1.0)
         mon_hq_np = np.clip(mon_hq_np, -1.0, 1.0)
-        # ==========================================================
         
-        # 将数据变形为网络需要的格式: (Batch, Channel, D, H, W) = (1, 1, 128, 64, 64)
-        mon_lq_tensor = torch.from_numpy(mon_lq_np).unsqueeze(0).unsqueeze(0).to(model.device)
-        mon_hq_tensor = torch.from_numpy(mon_hq_np).unsqueeze(0).unsqueeze(0).to(model.device)
-        print("✅ 固定监控样本加载完毕并已归一化！")
+        # ==========================================================
+        # [核心修复：2.5D 降维改造]：提取中心层，抛弃 3D 体积
+        # ==========================================================
+        # 假设 mon_lq_np 形状是 (D, H, W)，比如 (128, 64, 64)
+        d, h, w = mon_lq_np.shape
+        z = d // 2  # 取最中间的一层作为固定监控切片
+        z_prev = max(0, z - 1)
+        z_next = min(d - 1, z + 1)
+        
+        # 为 LQ 切出 3 层
+        lq_slice_prev = mon_lq_np[z_prev, :, :]
+        lq_slice_curr = mon_lq_np[z, :, :]
+        lq_slice_next = mon_lq_np[z_next, :, :]
+        
+        # 叠成 (3, H, W) 和 (1, H, W)
+        mon_lq_25d = np.stack([lq_slice_prev, lq_slice_curr, lq_slice_next], axis=0)
+        mon_hq_2d = np.expand_dims(mon_hq_np[z, :, :], axis=0)
+        
+        # 升维加上 Batch 维度: (1, Channel, H, W)
+        mon_lq_tensor = torch.from_numpy(mon_lq_25d).unsqueeze(0).to(model.device)
+        mon_hq_tensor = torch.from_numpy(mon_hq_2d).unsqueeze(0).to(model.device)
+        
+        print(f"✅ 固定监控样本已转换为 2.5D！LQ={mon_lq_tensor.shape}, HQ={mon_hq_tensor.shape}")
     else:
         print("⚠️ 未检测到 monitor_data，请确认你是否运行过 crop_monitor_patch.py！")
-
+        
     expr_dir = os.path.join(opt.checkpoints_dir, opt.name)
     if not os.path.exists(expr_dir): os.makedirs(expr_dir)
     log_name = os.path.join(expr_dir, 'loss_log.csv')
