@@ -1,6 +1,54 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
+import math
+
+class GaussianBlurLayer(nn.Module):
+    """自定义的高斯模糊层（物理老花镜），用于高低频解耦"""
+    def __init__(self, channels=1, kernel_size=7, sigma=3.0):
+        super(GaussianBlurLayer, self).__init__()
+        self.channels = channels
+        self.kernel_size = kernel_size
+        self.sigma = sigma
+
+        # 生成 2D 高斯核
+        x_coord = torch.arange(kernel_size)
+        x_grid = x_coord.repeat(kernel_size).view(kernel_size, kernel_size)
+        y_grid = x_grid.t()
+        xy_grid = torch.stack([x_grid, y_grid], dim=-1).float()
+
+        mean = (kernel_size - 1) / 2.
+        variance = sigma ** 2.
+
+        gaussian_kernel = (1. / (2. * math.pi * variance)) * torch.exp(
+            -torch.sum((xy_grid - mean) ** 2., dim=-1) / (2 * variance)
+        )
+        gaussian_kernel = gaussian_kernel / torch.sum(gaussian_kernel)
+
+        # Reshape 为深度可分离卷积的权重格式
+        gaussian_kernel = gaussian_kernel.view(1, 1, kernel_size, kernel_size)
+        gaussian_kernel = gaussian_kernel.repeat(channels, 1, 1, 1)
+
+        self.gaussian_filter = nn.Conv2d(in_channels=channels, out_channels=channels,
+                                         kernel_size=kernel_size, groups=channels,
+                                         bias=False, padding=kernel_size // 2)
+        self.gaussian_filter.weight.data = gaussian_kernel
+        self.gaussian_filter.weight.requires_grad = False # 权重固定，不参与训练
+
+    def forward(self, x):
+        return self.gaussian_filter(x)
+
+
+class CharbonnierLoss(nn.Module):
+    """论文公式 (9) 的精确实现：平滑的 L1，绝不会把高频散斑压成塑料块"""
+    def __init__(self, eps=1e-6):
+        super(CharbonnierLoss, self).__init__()
+        self.eps = eps
+
+    def forward(self, x, y):
+        diff = x - y
+        loss = torch.mean(torch.sqrt(diff * diff + self.eps))
+        return loss
 
 # =========================================================================
 # [模块 1] VGG19 特征提取器

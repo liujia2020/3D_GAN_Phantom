@@ -1,7 +1,7 @@
 import torch
 from .base_model import BaseModel
 from . import networks
-from .losses import FrequencyLoss
+from .losses import FrequencyLoss, CharbonnierLoss, VGG19FeatureExtractor, GaussianBlurLayer
 from utils.ssim_loss import SSIMLoss
 
 class AuganModel(BaseModel):
@@ -9,15 +9,17 @@ class AuganModel(BaseModel):
     def modify_commandline_options(parser, is_train=True):
         parser.set_defaults(norm='batch', netG='res_unet_3d', dataset_mode='ultrasound')
         if is_train:
-            parser.add_argument('--lambda_pixel', type=float, default=100.0, help='weight for L1 loss')
+            parser.add_argument('--lambda_pixel', type=float, default=1.0, help='weight for Charbonnier loss (pixel)')
             parser.add_argument('--lambda_gan', type=float, default=1.0, help='weight for GAN loss')
+            parser.add_argument('--lambda_vgg', type=float, default=10.0, help='weight for VGG perceptual loss')
             parser.add_argument('--lambda_ssim', type=float, default=10.0, help='weight for SSIM loss')
             parser.add_argument('--lambda_ffl', type=float, default=10.0, help='weight for FFL loss')
         return parser
 
     def __init__(self, opt):
         BaseModel.__init__(self, opt)
-        self.loss_names = ['G_GAN', 'G_L1', 'D_real', 'D_fake', 'G_SSIM', 'G_FFL']
+        # self.loss_names = ['G_GAN', 'G_L1', 'D_real', 'D_fake', 'G_SSIM', 'G_FFL']
+        self.loss_names = ['G_GAN', 'G_L1', 'G_VGG', 'D_real', 'D_fake', 'G_SSIM', 'G_FFL']
         self.visual_names = ['real_LQ_mid', 'fake_HQ', 'real_SQ']
         
         if self.isTrain:
@@ -40,18 +42,20 @@ class AuganModel(BaseModel):
 
             # 修复 no_lsgan 报错：直接写死 use_lsgan=True
             self.criterionGAN = networks.GANLoss(use_lsgan=True).to(self.device)
-            self.criterionL1 = torch.nn.L1Loss()
+            # self.criterionL1 = torch.nn.L1Loss()
+            self.criterionL1 = CharbonnierLoss()
+            self.criterionVGG = VGG19FeatureExtractor().to(self.device)
             self.criterionSSIM = SSIMLoss(window_size=11, val_range=2.0).to(self.device)
             # 修复 FrequencyLoss 名称不匹配
             self.criterionFFL = FrequencyLoss().to(self.device)
-            
+            self.gaussian_blur = GaussianBlurLayer(channels=1, kernel_size=7, sigma=3.0).to(self.device)
             self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizers.append(self.optimizer_G)
             self.optimizers.append(self.optimizer_D)
 
     def set_input(self, input):
-        # real_LQ 是 3 个通道 (z-1, z, z+1)
+        # real_LQ 是 3 个通道 (z-1, z, z+1self.gaussian_blur = GaussianBlurLayer(channels=1, kernel_size=7, sigma=3.0).to(self.device))
         self.real_LQ = input['lq'].to(self.device)
         # real_SQ 是 1 个通道 (z)
         self.real_SQ = input['sq'].to(self.device)
@@ -79,19 +83,69 @@ class AuganModel(BaseModel):
         self.loss_D = (self.loss_D_fake + self.loss_D_real) * 0.5
         self.loss_D.backward()
 
+    # def backward_G(self):
+    #     fake_AB = torch.cat((self.real_LQ, self.fake_HQ), 1)
+    #     pred_fake = self.netD(fake_AB)
+    #     self.loss_G_GAN = self.criterionGAN(pred_fake, True) * self.opt.lambda_gan
+
+    #     # L1, SSIM, FFL 只在 1 通道的假图和真图之间计算，公平公正
+    #     self.loss_G_L1 = self.criterionL1(self.fake_HQ, self.real_SQ) * self.opt.lambda_pixel
+    #     self.loss_G_SSIM = self.criterionSSIM(self.fake_HQ, self.real_SQ) * self.opt.lambda_ssim
+    #     self.loss_G_FFL = self.criterionFFL(self.fake_HQ, self.real_SQ) * self.opt.lambda_ffl
+
+    #     self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_G_SSIM + self.loss_G_FFL
+    #     self.loss_G.backward()
+
+    # def backward_G(self):
+    #     fake_AB = torch.cat((self.real_LQ, self.fake_HQ), 1)
+    #     pred_fake = self.netD(fake_AB)
+    #     self.loss_G_GAN = self.criterionGAN(pred_fake, True) * self.opt.lambda_gan
+
+    #     # 1. 像素级软对齐（使用 Charbonnier，不再强迫症）
+    #     self.loss_G_L1 = self.criterionL1(self.fake_HQ, self.real_SQ) * self.opt.lambda_pixel
+        
+    #     # 2. VGG 感知特征对齐（将 1 通道扩展为 3 通道喂给 VGG）
+    #     fake_HQ_3c = self.fake_HQ.repeat(1, 3, 1, 1)
+    #     real_SQ_3c = self.real_SQ.repeat(1, 3, 1, 1)
+    #     features_fake = self.criterionVGG(fake_HQ_3c)
+    #     features_real = self.criterionVGG(real_SQ_3c)
+    #     self.loss_G_VGG = torch.nn.functional.l1_loss(features_fake, features_real) * self.opt.lambda_vgg
+
+    #     # 3. 其它遗留 Loss（后续跑命令时它们的 lambda 设为 0 即可关掉）
+    #     self.loss_G_SSIM = self.criterionSSIM(self.fake_HQ, self.real_SQ) * self.opt.lambda_ssim
+    #     self.loss_G_FFL = self.criterionFFL(self.fake_HQ, self.real_SQ) * self.opt.lambda_ffl
+
+    #     # 终极相加
+    #     self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_G_VGG + self.loss_G_SSIM + self.loss_G_FFL
+    #     self.loss_G.backward()
+
     def backward_G(self):
         fake_AB = torch.cat((self.real_LQ, self.fake_HQ), 1)
         pred_fake = self.netD(fake_AB)
         self.loss_G_GAN = self.criterionGAN(pred_fake, True) * self.opt.lambda_gan
 
-        # L1, SSIM, FFL 只在 1 通道的假图和真图之间计算，公平公正
-        self.loss_G_L1 = self.criterionL1(self.fake_HQ, self.real_SQ) * self.opt.lambda_pixel
+        # ===== 核心修改：高低频彻底解耦 =====
+        
+        # 1. L1 / Charbonnier 戴上老花镜：只对齐模糊后的宏观结构（骨架）
+        fake_HQ_blurred = self.gaussian_blur(self.fake_HQ)
+        real_SQ_blurred = self.gaussian_blur(self.real_SQ)
+        self.loss_G_L1 = self.criterionL1(fake_HQ_blurred, real_SQ_blurred) * self.opt.lambda_pixel
+        
+        # 2. VGG 保持裸眼：在清晰原图上抓取高频散斑特征（皮肉）
+        fake_HQ_3c = self.fake_HQ.repeat(1, 3, 1, 1)
+        real_SQ_3c = self.real_SQ.repeat(1, 3, 1, 1)
+        features_fake = self.criterionVGG(fake_HQ_3c)
+        features_real = self.criterionVGG(real_SQ_3c)
+        self.loss_G_VGG = torch.nn.functional.l1_loss(features_fake, features_real) * self.opt.lambda_vgg
+
+        # 3. 遗留项
         self.loss_G_SSIM = self.criterionSSIM(self.fake_HQ, self.real_SQ) * self.opt.lambda_ssim
         self.loss_G_FFL = self.criterionFFL(self.fake_HQ, self.real_SQ) * self.opt.lambda_ffl
 
-        self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_G_SSIM + self.loss_G_FFL
+        # 终极总 Loss
+        self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_G_VGG + self.loss_G_SSIM + self.loss_G_FFL
         self.loss_G.backward()
-
+    
     def optimize_parameters(self):
         self.forward()
         self.set_requires_grad(self.netD, True)
