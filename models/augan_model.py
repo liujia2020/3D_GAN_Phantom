@@ -83,41 +83,6 @@ class AuganModel(BaseModel):
         self.loss_D = (self.loss_D_fake + self.loss_D_real) * 0.5
         self.loss_D.backward()
 
-    # def backward_G(self):
-    #     fake_AB = torch.cat((self.real_LQ, self.fake_HQ), 1)
-    #     pred_fake = self.netD(fake_AB)
-    #     self.loss_G_GAN = self.criterionGAN(pred_fake, True) * self.opt.lambda_gan
-
-    #     # L1, SSIM, FFL 只在 1 通道的假图和真图之间计算，公平公正
-    #     self.loss_G_L1 = self.criterionL1(self.fake_HQ, self.real_SQ) * self.opt.lambda_pixel
-    #     self.loss_G_SSIM = self.criterionSSIM(self.fake_HQ, self.real_SQ) * self.opt.lambda_ssim
-    #     self.loss_G_FFL = self.criterionFFL(self.fake_HQ, self.real_SQ) * self.opt.lambda_ffl
-
-    #     self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_G_SSIM + self.loss_G_FFL
-    #     self.loss_G.backward()
-
-    # def backward_G(self):
-    #     fake_AB = torch.cat((self.real_LQ, self.fake_HQ), 1)
-    #     pred_fake = self.netD(fake_AB)
-    #     self.loss_G_GAN = self.criterionGAN(pred_fake, True) * self.opt.lambda_gan
-
-    #     # 1. 像素级软对齐（使用 Charbonnier，不再强迫症）
-    #     self.loss_G_L1 = self.criterionL1(self.fake_HQ, self.real_SQ) * self.opt.lambda_pixel
-        
-    #     # 2. VGG 感知特征对齐（将 1 通道扩展为 3 通道喂给 VGG）
-    #     fake_HQ_3c = self.fake_HQ.repeat(1, 3, 1, 1)
-    #     real_SQ_3c = self.real_SQ.repeat(1, 3, 1, 1)
-    #     features_fake = self.criterionVGG(fake_HQ_3c)
-    #     features_real = self.criterionVGG(real_SQ_3c)
-    #     self.loss_G_VGG = torch.nn.functional.l1_loss(features_fake, features_real) * self.opt.lambda_vgg
-
-    #     # 3. 其它遗留 Loss（后续跑命令时它们的 lambda 设为 0 即可关掉）
-    #     self.loss_G_SSIM = self.criterionSSIM(self.fake_HQ, self.real_SQ) * self.opt.lambda_ssim
-    #     self.loss_G_FFL = self.criterionFFL(self.fake_HQ, self.real_SQ) * self.opt.lambda_ffl
-
-    #     # 终极相加
-    #     self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_G_VGG + self.loss_G_SSIM + self.loss_G_FFL
-    #     self.loss_G.backward()
 
     def backward_G(self):
         fake_AB = torch.cat((self.real_LQ, self.fake_HQ), 1)
@@ -132,10 +97,26 @@ class AuganModel(BaseModel):
         self.loss_G_L1 = self.criterionL1(fake_HQ_blurred, real_SQ_blurred) * self.opt.lambda_pixel
         
         # 2. VGG 保持裸眼：在清晰原图上抓取高频散斑特征（皮肉）
-        fake_HQ_3c = self.fake_HQ.repeat(1, 3, 1, 1)
-        real_SQ_3c = self.real_SQ.repeat(1, 3, 1, 1)
-        features_fake = self.criterionVGG(fake_HQ_3c)
-        features_real = self.criterionVGG(real_SQ_3c)
+        # 2. VGG 保持裸眼：在清晰原图上抓取高频散斑特征（必须遵守 ImageNet 规范）
+        # 将网络输出的 [-1, 1] 映射到 [0, 1]
+        fake_HQ_01 = (self.fake_HQ + 1.0) / 2.0
+        real_SQ_01 = (self.real_SQ + 1.0) / 2.0
+        
+        # 扩展为 3 通道
+        fake_HQ_3c = fake_HQ_01.repeat(1, 3, 1, 1)
+        real_SQ_3c = real_SQ_01.repeat(1, 3, 1, 1)
+
+        # 准备 ImageNet 的均值和标准差张量 (广播维度对齐 batch, channel, h, w)
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(self.device)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(self.device)
+
+        # 执行强制标准化
+        fake_HQ_norm = (fake_HQ_3c - mean) / std
+        real_SQ_norm = (real_SQ_3c - mean) / std
+
+        # 喂给 VGG 计算特征差异
+        features_fake = self.criterionVGG(fake_HQ_norm)
+        features_real = self.criterionVGG(real_SQ_norm)
         self.loss_G_VGG = torch.nn.functional.l1_loss(features_fake, features_real) * self.opt.lambda_vgg
 
         # 3. 遗留项

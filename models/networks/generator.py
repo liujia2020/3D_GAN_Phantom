@@ -33,7 +33,7 @@ class ResUnetSkipConnectionBlock(nn.Module):
     def __init__(self, outer_nc, inner_nc, input_nc=None,
                  submodule=None, outermost=False, innermost=False, norm_layer=nn.BatchNorm2d, use_dropout=False, is_3d=False, use_attention=False, attn_temp=1.0, dilation=1, use_aspp=False, upsample_mode='bilinear'): 
         super(ResUnetSkipConnectionBlock, self).__init__()
-        self.outermost = outermost
+        self.outermost = outermostc
         self.innermost = innermost
         self.use_attention = use_attention
         self.is_3d = False
@@ -42,7 +42,7 @@ class ResUnetSkipConnectionBlock(nn.Module):
         Conv = nn.Conv2d
         use_bias = norm_layer == nn.InstanceNorm2d
 
-        downconv = Conv(input_nc, inner_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+        downconv = Conv(input_nc, inner_nc, kernel_size=4, stride=2, padding=1, bias=use_bias, padding_mode='reflect')
         downrelu = nn.LeakyReLU(0.2, False)
         downnorm = norm_layer(inner_nc)
         uprelu = nn.ReLU(False)
@@ -57,14 +57,14 @@ class ResUnetSkipConnectionBlock(nn.Module):
         if outermost:
             up_layer = nn.Sequential(
                 nn.Upsample(scale_factor=2, mode=mode_to_use, **kwargs),
-                Conv(inner_nc * 2, outer_nc, kernel_size=3, stride=1, padding=1, bias=True)
+                Conv(inner_nc * 2, outer_nc, kernel_size=3, stride=1, padding=1, bias=True, padding_mode='reflect')
             )
             model = [downconv, enc_res_block] + [submodule] + [uprelu, up_layer, nn.Tanh()] 
             
         elif innermost:
             up_layer = nn.Sequential(
                 nn.Upsample(scale_factor=2, mode=mode_to_use, **kwargs),
-                Conv(inner_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias)
+                Conv(inner_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias, padding_mode='reflect')
             )
             if use_aspp:
                 aspp_layer = ASPP2D(inner_nc, inner_nc, norm_layer=norm_layer)
@@ -75,7 +75,7 @@ class ResUnetSkipConnectionBlock(nn.Module):
         else:
             up_layer = nn.Sequential(
                 nn.Upsample(scale_factor=2, mode=mode_to_use, **kwargs),
-                Conv(inner_nc * 2, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias)
+                Conv(inner_nc * 2, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias, padding_mode='reflect')
             )
             down = [downrelu, downconv, downnorm, enc_res_block]
             up = [uprelu, up_layer, upnorm, dec_res_block]

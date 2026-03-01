@@ -31,7 +31,7 @@ class GaussianBlurLayer(nn.Module):
 
         self.gaussian_filter = nn.Conv2d(in_channels=channels, out_channels=channels,
                                          kernel_size=kernel_size, groups=channels,
-                                         bias=False, padding=kernel_size // 2)
+                                         bias=False, padding=kernel_size // 2, padding_mode='reflect')
         self.gaussian_filter.weight.data = gaussian_kernel
         self.gaussian_filter.weight.requires_grad = False # 权重固定，不参与训练
 
